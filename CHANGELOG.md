@@ -10,6 +10,36 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.8]
+
+### Fixed
+
+- **Menu bar status item never painted when launched via `open`/Finder.**
+  This was the deeper cause behind v4–v7's churn. macOS Sequoia
+  silently suppresses NSStatusItem rendering for processes that
+  remain attached to Launch Services' bundle activation lifecycle —
+  even when the item exists in the system status bar with valid
+  screen coordinates (verified via AppKit). The launcher's
+  `exec "$PYTHON" menubar.py` pattern kept Python in that attached
+  context. Symptom: process alive, log healthy, valid signature,
+  but menu bar empty. Direct shell invocation of the same Python
+  worked because that path doesn't go through Launch Services.
+  Fix: launcher now spawns Python via
+  `nohup "$PYTHON" menubar.py … & disown; exit 0`. Bash exits
+  cleanly so Launch Services treats the .app launch as complete;
+  Python keeps running detached and its status item paints.
+- **Always-visible "M" text** in the menu bar alongside the icon —
+  defense in depth so even if the template-image rendering edge
+  cases (Sequoia, Ice, notch overflow) hide the icon, the text
+  anchors the item.
+
+### Changed
+
+- **Releases v4–v7 yanked from GitHub.** Each was a partial fix
+  for a problem this release finally resolves. Cask jumps from v3
+  to v8; users who brew-installed any intermediate version will
+  upgrade once and be done.
+
 ## [2026.05.07.7]
 
 ### Fixed
@@ -380,7 +410,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.7...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.8...HEAD
+[2026.05.07.8]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.8
 [2026.05.07.7]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...v2026.05.07.7
 [2026.05.07.6]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...v2026.05.07.6
 [2026.05.07.5]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.4...v2026.05.07.5
