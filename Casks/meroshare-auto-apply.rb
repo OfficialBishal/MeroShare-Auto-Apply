@@ -26,9 +26,21 @@ cask "meroshare-auto-apply" do
   # saves users from running `xattr -dr com.apple.quarantine`
   # themselves after every install / upgrade.
   postflight do
+    # Strip quarantine: macOS Sequoia rejects ad-hoc-signed bundles
+    # downloaded through the quarantine flag with a "damaged" dialog
+    # even when the signature is valid.
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine",
                           "#{appdir}/MeroShare Auto-Apply.app"]
+    # Force-refresh the Launch Services cache for this bundle so
+    # subsequent `open`/Finder launches pick up the freshly-installed
+    # version. After a `brew upgrade` the old bundle's record can
+    # linger and intercept launches, leaving the user staring at a
+    # menu bar that never appears.
+    system_command "/System/Library/Frameworks/CoreServices.framework/" \
+                   "Versions/A/Frameworks/LaunchServices.framework/Versions/A/" \
+                   "Support/lsregister",
+                   args: ["-f", "#{appdir}/MeroShare Auto-Apply.app"]
   end
 
   zap trash: [
