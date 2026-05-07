@@ -303,20 +303,41 @@ class ShutdownRouteTests(_FlaskTestCase):
         # Regression: previously the menu bar lingered up to 30 seconds
         # after "Stop everything" because it polled the sentinel file
         # on its 30s tick. /api/shutdown now also pgrep's the menu bar
-        # process and SIGTERMs it. Verify pgrep is invoked AND the
-        # SIGTERM happens (mocked, since the menubar.py script only
-        # exists at runtime in production builds).
+        # process and SIGTERMs it. Verify pgrep is invoked.
+        #
+        # We must mock threading.Thread alongside subprocess.run / os.kill:
+        # /api/shutdown spawns BOTH a _signal_menubar thread (the new path)
+        # AND a _shutdown thread that calls os.kill(getpid(), SIGINT)
+        # after a 0.3s delay. Without mocking Thread, the with-block
+        # would exit before _shutdown's sleep completed — the os.kill
+        # mock would come off, and the real SIGINT would land on the
+        # test runner's main thread. CPython 3.13 happened to deliver
+        # that signal during a later test's os.fsync, killing the
+        # whole suite mid-run.
         fake_proc = mock.MagicMock()
         fake_proc.stdout = ""  # no menu bar to signal in tests
-        with mock.patch.object(app_module.subprocess, "run",
-                               return_value=fake_proc) as mock_run, \
+
+        # Capture what each Thread() call gets — we want to verify
+        # pgrep is invoked from inside _signal_menubar.
+        thread_targets = []
+        def _capture_thread(*, target=None, **_kwargs):
+            if target is not None:
+                thread_targets.append(target)
+            return mock.MagicMock()
+
+        with mock.patch.object(app_module.threading, "Thread",
+                               side_effect=_capture_thread), \
+                mock.patch.object(app_module.subprocess, "run",
+                                  return_value=fake_proc) as mock_run, \
                 mock.patch.object(app_module.os, "kill"), \
                 mock.patch.object(app_module.scheduler, "stop"):
             resp = self.client.post("/api/shutdown")
-            # The signal-menubar thread is daemon=True and runs in the
-            # background. Give it a moment to fire.
-            import time as _t
-            _t.sleep(0.1)
+            # Run the captured thread targets synchronously so the test
+            # observes their side-effects (pgrep call) without spawning
+            # real threads or risking a SIGINT race.
+            for target in thread_targets:
+                if target.__name__ == "_signal_menubar":
+                    target()
         self.assertEqual(resp.status_code, 200)
         # pgrep was called with the menubar.py pattern.
         called_args = [c.args[0] for c in mock_run.call_args_list]
