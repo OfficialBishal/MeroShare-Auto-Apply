@@ -10,6 +10,24 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.7]
+
+### Fixed
+
+- **Menu bar icon never appeared when launched via Finder /
+  `open .app`** — the bug all of v4–v6 carried without us
+  realizing. The menubar.py process was alive, the log said
+  "Registered bundle icon for notifications + Dock", and Flask
+  was reachable, but rumps's NSStatusItem silently never
+  painted. Direct Python invocation (terminal) worked fine,
+  which masked the bug during development. The cause: the
+  bundle's Info.plist was missing `NSPrincipalClass`. Without
+  that key, AppKit doesn't fully initialize the bundle as a
+  Cocoa app via Launch Services — `NSStatusBar.statusItemWithLength_`
+  returns an item that never paints. Added
+  `NSPrincipalClass = NSApplication` to the build's Info.plist
+  generation.
+
 ## [2026.05.07.6]
 
 ### Fixed
@@ -362,7 +380,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.7...HEAD
+[2026.05.07.7]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...v2026.05.07.7
 [2026.05.07.6]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...v2026.05.07.6
 [2026.05.07.5]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.4...v2026.05.07.5
 [2026.05.07.4]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.4
