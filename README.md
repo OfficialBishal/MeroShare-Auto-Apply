@@ -18,14 +18,25 @@ Automatically checks MeroShare for new share issues and applies for you. Just se
 
 ## Getting Started
 
-### Easiest path — download the prebuilt app
+### Easiest path on macOS — Homebrew
 
-Grab the latest release from [GitHub Releases](https://github.com/OfficialBishal/MeroShare-Auto-Apply/releases/latest):
+If you have [Homebrew](https://brew.sh):
+
+```
+brew tap officialbishal/meroshare https://github.com/OfficialBishal/MeroShare-Auto-Apply
+brew install --cask meroshare-auto-apply
+```
+
+`brew upgrade` picks up future releases automatically; the in-app **Check for Updates** still works too. Homebrew bypasses the Gatekeeper "damaged" prompt entirely, so this is the friction-free path.
+
+### Download the prebuilt app
+
+If you'd rather not use Homebrew, grab the latest release from [GitHub Releases](https://github.com/OfficialBishal/MeroShare-Auto-Apply/releases/latest):
 
 - **macOS**: `MeroShare-Auto-Apply.dmg` — open it, drag the app to Applications, launch from Launchpad. The first launch needs ~30 seconds for the bundled browser engine to download. No Python install required.
 - **Windows**: `MeroShare-Auto-Apply-windows.zip` — extract anywhere, double-click `Run MeroShare Auto-Apply.bat`. The first launch installs dependencies (~2–5 minutes); subsequent launches are instant.
 
-**On macOS Sequoia (and newer)**, double-clicking a freshly-downloaded build often shows *"MeroShare Auto-Apply.app is damaged and can't be opened"*. The `.app` isn't actually damaged — macOS refuses to run ad-hoc-signed binaries that came through the browser. One-time fix: open Terminal and paste the line below, then double-click the app normally.
+**On macOS Sequoia (and newer)**, double-clicking a freshly-downloaded build often shows *"MeroShare Auto-Apply.app is damaged and can't be opened"*. The `.app` isn't actually damaged — macOS refuses to run ad-hoc-signed binaries that came through the browser. The .dmg ships a double-clickable rescue script (`If macOS says damaged — double-click me.command`) that fixes it; or open Terminal and paste:
 
 ```
 xattr -dr com.apple.quarantine "/Applications/MeroShare Auto-Apply.app"
