@@ -340,7 +340,7 @@ class MeroShareMenuBar(rumps.App):
         icon_path = str(ICON_PATH) if ICON_PATH.exists() else None
         super().__init__(
             name="MeroShare",
-            title="Starting…" if icon_path else "MeroShare",
+            title="M",  # always-visible text fallback paired with template icon
             icon=icon_path,
             template=True,  # auto-invert for light/dark menu bars
             # Single "Quit" item (replaces the previous two-button
@@ -653,7 +653,13 @@ class MeroShareMenuBar(rumps.App):
                 # is the rumps-native way to drop the text.
                 if ICON_PATH.exists():
                     try:
-                        self.title = None
+                        # Keep a literal "M" next to the icon so the
+                        # menu bar always has a fallback if the icon
+                        # itself fails to paint (template-image quirks
+                        # under Ice / notch / Sequoia overflow). When
+                        # the icon paints normally, the user sees both;
+                        # when it doesn't, "M" still anchors the item.
+                        self.title = "M"
                     except Exception as e:
                         logger.debug("Could not clear menubar title: %s", e)
                 # Trigger an immediate refresh so the status header
@@ -674,14 +680,14 @@ class MeroShareMenuBar(rumps.App):
             "auto-start: Flask didn't reach /api/health within 15s; "
             "status will reflect 'stopped' until next user action.",
         )
-        # Failure path: clear the "Starting…" title to avoid lying
-        # about ongoing work, but the menu's status header will flag
-        # "Status: app stopped" so the user has actionable feedback.
+        # Failure path: keep the "M" anchor visible. The menu's
+        # status header will flag "Status: app stopped" on its next
+        # tick so the user has actionable feedback.
         if ICON_PATH.exists():
             try:
-                self.title = None
+                self.title = "M"
             except Exception as e:
-                logger.debug("Could not clear menubar title: %s", e)
+                logger.debug("Could not set menubar title: %s", e)
         # When Flask doesn't bind in time, the menu's status header
         # paints "Status: app stopped" on its next tick — that's the
         # surface the user sees. We deliberately do NOT toast a
