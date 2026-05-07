@@ -312,12 +312,22 @@ class MeroShareMenuBar(rumps.App):
         # everything" to terminate the right tree.
         self._flask_proc: subprocess.Popen | None = None
 
-        # Apply the persisted Dock-visibility preference. Without
-        # this, toggling Show-in-Dock and restarting would always
-        # boot in the plist's default (LSUIElement=true → no Dock),
-        # losing the user's choice.
-        if _show_in_dock_enabled():
-            _set_dock_visibility(True)
+        # NSApp doesn't exist until rumps.App.run() spins up the Cocoa
+        # runloop, so anything that pokes NSApp (setActivationPolicy_,
+        # setApplicationIconImage_) has to wait. We schedule the
+        # application of these post-launch via a one-shot Timer that
+        # fires once the runloop is alive. The previous form ran
+        # _set_dock_visibility / _refresh_app_icon_image directly in
+        # __init__ and silently swallowed an AttributeError on every
+        # launch — both became no-ops, so Show-in-Dock didn't apply
+        # and the notification icon cache never got refreshed.
+        def _post_launch(_sender):
+            self._post_launch_timer.stop()
+            if _show_in_dock_enabled():
+                _set_dock_visibility(True)
+            self._refresh_app_icon_image()
+        self._post_launch_timer = rumps.Timer(_post_launch, 0.1)
+        self._post_launch_timer.start()
 
         # Build the menu structure once. Most items are stable; the
         # submenu contents get rebuilt by tick handlers as state
@@ -373,14 +383,10 @@ class MeroShareMenuBar(rumps.App):
         self._sentinel_fast_timer = rumps.Timer(self._sentinel_check_tick, 1.0)
         self._sentinel_fast_timer.start()
 
-        # Explicitly register the bundle's icon as the application
-        # icon image. NSUserNotification queries NSApp.applicationIconImage
-        # when rendering toast icons, and macOS occasionally caches a
-        # null/generic icon from a previous install (notably when the
-        # earlier launcher used `nohup … &` to detach Python and the
-        # orphaned process registered without a bundle association).
-        # Re-setting the image on every launch invalidates that cache.
-        self._refresh_app_icon_image()
+        # NB: NSApp.setApplicationIconImage_ now runs from
+        # _post_launch_timer above, after the Cocoa runloop is alive.
+        # Calling it directly in __init__ (NSApp is None pre-run)
+        # silently no-op'd on every launch.
 
         # SIGTERM handler: when the user clicks Settings → "Stop
         # everything" in the dashboard, /api/shutdown sends us SIGTERM
@@ -776,11 +782,15 @@ class MeroShareMenuBar(rumps.App):
         new_scheduler = self._api("/api/scheduler") or {}
         new_accounts = self._api("/api/accounts") or []
         issues_resp = self._api("/api/issues") or {}
-        new_issues = (
-            issues_resp.get("issues")
-            if isinstance(issues_resp, dict)
-            else issues_resp or []
-        )
+        # /api/issues returns {"issues": [...]} on the happy path, but a
+        # cold-start Flask can briefly return {}. The `or []` here
+        # handles both: missing key → None → [], and non-dict → bare
+        # list. The previous form left `or []` only on the else
+        # branch and let None leak through to _render_status_lines.
+        if isinstance(issues_resp, dict):
+            new_issues = issues_resp.get("issues") or []
+        else:
+            new_issues = issues_resp or []
         new_config = self._api("/api/config") or {}
 
         # Skip rebuilding submenus whose source data is byte-for-byte
