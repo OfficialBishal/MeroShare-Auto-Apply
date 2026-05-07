@@ -305,11 +305,17 @@ end tell
 OS_EOF
 fi
 
-# Launch the menu bar app. Detached so the .app's launcher process
-# can exit cleanly; rumps takes the menu bar from there. Logs go
-# to ~/Library/Logs (writable from any bundle location).
-nohup "$PYTHON" menubar.py >"$LOGS_DIR/menubar.log" 2>&1 &
-disown 2>/dev/null || true
+# Launch the menu bar app via exec so the Python interpreter
+# REPLACES this launcher in the same process. Critical for the
+# Dock icon: macOS associates the bundle's icon.icns with the
+# .app's main-executable PID. The previous "nohup ... &" pattern
+# detached Python from the launcher, leaving Python as an orphan
+# whose Dock icon (when "Show in Dock" was toggled on) defaulted
+# to a generic Python rocket. With exec, the Python process IS
+# the .app's main executable: setActivationPolicy_(.regular)
+# from the menu picks up icon.icns correctly, Activity Monitor
+# shows "MeroShare Auto-Apply", and Cmd-Tab gets the right name.
+exec "$PYTHON" menubar.py >"$LOGS_DIR/menubar.log" 2>&1
 LAUNCHER_EOF
 chmod +x "$LAUNCHER_PATH"
 
