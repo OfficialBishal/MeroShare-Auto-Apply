@@ -10,6 +10,23 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.3]
+
+### Added
+
+- **Rescue script bundled inside the .dmg** for the macOS Sequoia
+  *"MeroShare Auto-Apply.app is damaged and can't be opened"*
+  Gatekeeper trap. ad-hoc-signed apps downloaded via a browser
+  trip Gatekeeper even though the bundle is fine; macOS refuses to
+  launch them without manually stripping the quarantine flag.
+  Until we have an Apple Developer ID, users hitting the error can
+  now double-click an `If macOS says damaged — double-click
+  me.command` file inside the .dmg — it strips
+  `com.apple.quarantine` from the installed app and opens it.
+  A `READ ME FIRST.txt` next to it explains the same fix in plain
+  text. README updated to lead with the rescue-script path; the
+  Terminal `xattr` command stays documented as the alternative.
+
 ## [2026.05.07.2]
 
 ### Fixed
@@ -263,7 +280,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.2...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...HEAD
+[2026.05.07.3]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.2...v2026.05.07.3
 [2026.05.07.2]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.1...v2026.05.07.2
 [2026.05.07.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07...v2026.05.07.1
 [2026.05.07]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/releases/tag/v2026.05.07
