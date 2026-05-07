@@ -10,6 +10,32 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.2]
+
+### Fixed
+
+- **Quit on the dashboard didn't terminate the menu bar promptly.**
+  The Stop-everything path writes a sentinel file AND sends SIGTERM
+  to the menu bar process, but Python signal handlers are deferred
+  until the VM yields, and the rumps event loop spends most of its
+  time inside a Cocoa runloop call where bytecode isn't running.
+  The handler could sit pending while the menu bar visibly lingered.
+  Added a 1-second `rumps.Timer` that polls the sentinel — timers
+  fire on the runloop directly via NSTimer, so teardown is now ~1s.
+- **Notification toasts showed a generic Script Editor icon instead
+  of the app logo.** macOS caches notification-icon associations
+  per bundle; if a previous install registered without a proper
+  bundle association (the pre-exec launcher era), the cache stuck.
+  `NSApp.setApplicationIconImage_` is now called at startup with
+  the bundle's `icon.icns`, which invalidates the stale association.
+- **"Check for Updates…" did nothing.** GitHub's
+  `/repos/.../releases/latest` endpoint occasionally returns 404
+  even when releases exist (newly-created repos take several
+  minutes to populate that endpoint). Fall back to `/repos/.../releases`
+  (list) and pick the first non-draft, non-prerelease entry. The
+  auto-updater now correctly reports newer tags during the
+  propagation window.
+
 ## [2026.05.07.1]
 
 ### Fixed
@@ -237,6 +263,7 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.1...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.2...HEAD
+[2026.05.07.2]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.1...v2026.05.07.2
 [2026.05.07.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07...v2026.05.07.1
 [2026.05.07]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/releases/tag/v2026.05.07
