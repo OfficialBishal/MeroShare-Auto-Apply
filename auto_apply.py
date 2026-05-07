@@ -531,7 +531,9 @@ def check_and_apply(config: dict, dry_run=False, results: dict | None = None):
 
             if not auto_config.get("enabled", False):
                 logger.info("    -> Auto-apply disabled.")
-                notify("New Share Available", f"{company_name} ({issue_type})")
+                # Notification removed by request — surfacing every new
+                # IPO/right share was too chatty. The dashboard's Open
+                # Issues tab already shows them at a glance.
                 continue
 
             if dry_run:
@@ -888,7 +890,9 @@ def run_daemon(config: dict, dry_run=False):
     interval = config.get("check_interval_hours", 6)
 
     logger.info("Starting daemon mode. Checking every %d hours.", interval)
-    notify("MeroShare Monitor Started", f"Checking every {interval} hours")
+    # Boot-ping notification removed by request. The menu bar status
+    # line already says "scheduler on" once it's running, which serves
+    # the same affordance without firing a toast on every restart.
 
     # Run immediately on start. The signal handlers are installed
     # above, so a SIGTERM during this initial cycle sets the flag,

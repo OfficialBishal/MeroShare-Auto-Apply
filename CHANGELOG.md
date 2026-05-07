@@ -10,6 +10,43 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.5]
+
+### Fixed
+
+- **`v2026.05.07.4` shipped a broken code signature.** The new
+  Info.plist stub the previous build added next to the bundled
+  Python interpreter tricked `codesign --deep` into signing the
+  `bin/` directory as a sub-bundle; the resulting manifest was
+  inconsistent and macOS Launch Services rejected the .app at
+  exec-time. Symptom on `open`/Finder launch: the bash launcher
+  ran, the log file got truncated by `>`, but no Python output
+  ever appeared — Python was silently killed by AMFI right after
+  exec. Removed the stub and routed `rumps.notification` through
+  `osascript display notification` instead, which doesn't depend
+  on the running binary's `NSBundle.mainBundle()` at all. Also
+  reordered the build so `codesign` is the LAST step that touches
+  the bundle (was previously running BEFORE `compileall`).
+
+- **Dock icon rendered visibly larger than other dock apps.** The
+  icon SVG filled the full 512x512 canvas; macOS dock icons need
+  ~10% padding per side so the rounded square fits the dock slot
+  at the same visual size as system apps. Inset the rect by 50px
+  per side and scaled the M proportionally.
+
+### Changed
+
+- **Notifications dialed way back.** Per request, only "Share
+  Applied!" and "Application Failed" desktop toasts remain. The
+  previous "New Share Available" (every newly-discovered IPO/right
+  share), "MeroShare Monitor Started" (scheduler boot ping), and
+  the entire allotment-status notification family (allotted / not
+  allotted / finalized) were too chatty. The dashboard's Open
+  Issues tab and per-account chips already convey all the
+  information; spamming the user with toasts after every poll was
+  noise. The allotment-state file is still maintained so a future
+  re-enable wouldn't dump a flood of historical transitions.
+
 ## [2026.05.07.4]
 
 ### Fixed
@@ -308,7 +345,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.4...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...HEAD
+[2026.05.07.5]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.4...v2026.05.07.5
 [2026.05.07.4]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.4
 [2026.05.07.3]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.2...v2026.05.07.3
 [2026.05.07.2]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.1...v2026.05.07.2
