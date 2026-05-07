@@ -298,7 +298,17 @@ fi
 # `Resources/python/bin/MeroShare` ensures we only count actual
 # in-bundle invocations as "existing instances". The leading [m]
 # trick still avoids pgrep self-matching.
-EXISTING_MENUBAR_PID=$(/usr/bin/pgrep -f "Resources/python/bin/MeroShare [^ ]*[m]enubar\.py" 2>/dev/null | head -1 || true)
+#
+# Use `.*` (not `[^ ]*`) so the pattern matches BOTH the bash
+# launcher's relative invocation (`MeroShare menubar.py` after a
+# `cd $APP_DIR`) AND the LaunchAgent's absolute one with spaces in
+# the path (`MeroShare /Applications/MeroShare Auto-Apply.app/.../
+# menubar.py`). Without `.*`, Login-Item-launched bundles failed
+# to detect a LaunchAgent-launched Python already running and
+# spawned a second instance, producing two M icons in the menu bar.
+# (Python-side flock in menubar.py is the real defense against
+# duplicates; this is just the fast-path optimization.)
+EXISTING_MENUBAR_PID=$(/usr/bin/pgrep -f "Resources/python/bin/MeroShare .*[m]enubar\.py" 2>/dev/null | head -1 || true)
 if [ -n "$EXISTING_MENUBAR_PID" ]; then
     /usr/bin/open "http://localhost:5050" 2>/dev/null || true
     exit 0

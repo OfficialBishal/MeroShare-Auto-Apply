@@ -45,6 +45,23 @@ the bottom keep the diff between versions one click away.
   trigger an apply before the background install completes, the
   existing apply-time error path surfaces "browser engine missing"
   in the dashboard.
+- **Two M icons in the menu bar at login** when both macOS Login
+  Items and the menu bar's "Launch at login" toggle were enabled
+  for the same .app. They fire on different paths:
+  - Login Item → Launch Services → bash launcher → spawns Python
+  - LaunchAgent (the toggle's plist) → bundled Python directly,
+    bypassing the bash launcher's existing-instance pgrep check
+  Two Python processes, two NSStatusItems, two M icons. Fixed
+  with a `fcntl.flock` single-instance guard in `menubar.py`
+  itself: whichever Python wins the lock holds it for its
+  lifetime; the loser opens the dashboard at `localhost:5050`
+  and exits. Robust against any combination of launch sources
+  (Login Items + LaunchAgent + manual click + dock-icon click).
+  Also widened the bash launcher's pgrep regex from `[^ ]*` to
+  `.*` so spaces in the bundle path don't defeat the fast-path
+  detection (the LaunchAgent's argv includes the literal string
+  `"MeroShare Auto-Apply.app"`, which the old regex couldn't
+  span).
 
 ### Changed
 

@@ -50,6 +50,17 @@ ICON_PATH = BASE_DIR / "static" / "menubar-icon.png"
 # "Open Dashboard".
 SHUTDOWN_SENTINEL = accounts.STATE_DIR / ".shutdown-requested"
 
+# Single-instance lockfile. The bash launcher's pgrep dedup catches
+# Login Item / Finder relaunches but is bypassed when the menu bar
+# is started directly (e.g. by the LaunchAgent at login, which the
+# Launch-at-login toggle installs and which invokes the bundled
+# Python directly — not the bash launcher). flock is the only
+# cross-launch-path defense: whichever Python process gets here
+# first holds the lock; the second, third, ... open the dashboard
+# and exit. Lives in STATE_DIR so it inherits the same path as the
+# rest of the per-user state.
+INSTANCE_LOCK_PATH = accounts.STATE_DIR / ".menubar-instance.lock"
+
 # Apple's standard launchd location for per-user, on-login agents.
 LAUNCH_AGENT_LABEL = "com.meroshare.menubar"
 LAUNCH_AGENT_PATH = (
@@ -1582,7 +1593,69 @@ def _launch_at_login_disable() -> None:
     )
 
 
+# Holds the open file descriptor for INSTANCE_LOCK_PATH for the
+# lifetime of the process. Module-level so it isn't garbage-collected
+# (which would close the fd and release the flock). Never close it
+# explicitly — the OS releases the lock when the process exits.
+_INSTANCE_LOCK_FD: int | None = None
+
+
+def _acquire_single_instance_lock() -> bool:
+    """Take an exclusive non-blocking flock on INSTANCE_LOCK_PATH.
+
+    Returns True if this process is the sole instance and may proceed,
+    False if another menubar.py is already running and we should bail.
+
+    The file is intentionally NOT removed on exit. flock semantics
+    free the lock when the holding fd is closed (process death does
+    this automatically), and leaving the inode in place lets the next
+    launch grab the same lock atomically without the unlink/recreate
+    race window.
+    """
+    global _INSTANCE_LOCK_FD
+    import fcntl  # POSIX-only; macOS-targeted module is fine
+    try:
+        accounts.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(INSTANCE_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        # Couldn't even create the lockfile (FS full, no perms). Be
+        # permissive: dedup is best-effort, not load-bearing for
+        # correctness, and bailing here would leave the user without
+        # a menu bar at all.
+        logger.warning("Instance lock unavailable; proceeding without dedup: %s", exc)
+        return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # Another instance already holds the lock.
+        os.close(fd)
+        return False
+    # Stash the holder's pid for diagnostics. Truncate first so a
+    # crashed predecessor's pid doesn't linger.
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+    except OSError:
+        pass
+    _INSTANCE_LOCK_FD = fd
+    return True
+
+
 def main() -> None:
+    if not _acquire_single_instance_lock():
+        # Another menu bar instance is up. Mirror the bash launcher's
+        # existing-instance branch (open dashboard, exit cleanly) so
+        # the user gets visible feedback regardless of which launch
+        # path won the race.
+        logger.info(
+            "Another menu bar instance holds %s; opening dashboard and exiting.",
+            INSTANCE_LOCK_PATH,
+        )
+        try:
+            webbrowser.open(BASE_URL, new=2)
+        except Exception:
+            pass
+        return
     MeroShareMenuBar().run()
 
 
