@@ -50,6 +50,41 @@ jobs:
           draft: false
           prerelease: false
 
+      # Bump the Homebrew cask on `main` so `brew upgrade` picks up
+      # the new version. Skipped silently when the cask file is
+      # missing or already up-to-date — keeps the workflow idempotent
+      # if a release run is replayed. The version comes through an
+      # env var so it never hits the shell as raw template
+      # interpolation (workflow-injection-safe pattern).
+      - name: Bump Homebrew cask
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          CASK="Casks/meroshare-auto-apply.rb"
+          if [ ! -f "$CASK" ]; then
+            echo "No cask file; skipping bump."
+            exit 0
+          fi
+          VERSION="${REF_NAME#v}"
+          SHA=$(shasum -a 256 dist/MeroShare-Auto-Apply.dmg | awk '{print $1}')
+          git fetch origin main
+          git checkout -B main origin/main
+          # BSD sed (macos-latest runner). The .bak suffix is required
+          # on BSD and harmless on GNU.
+          sed -i.bak -E "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK"
+          sed -i.bak -E "s/^  sha256 \".*\"/  sha256 \"${SHA}\"/" "$CASK"
+          rm "${CASK}.bak"
+          if git diff --quiet -- "$CASK"; then
+            echo "Cask already at ${VERSION} with matching sha256; nothing to do."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$CASK"
+          git commit -m "Bump Homebrew cask to ${VERSION}"
+          git push origin main
+
   # Windows portable .zip. Cross-built on macOS (no Windows runner
   # needed since we only download Python embeddable + zip the source).
   # Putting it in the same workflow ensures both artifacts land in
