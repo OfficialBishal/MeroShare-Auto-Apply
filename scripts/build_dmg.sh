@@ -168,6 +168,30 @@ fi
 NAMED_PYTHON_BIN="$PY_BUNDLE_DIR/bin/MeroShare"
 ln -f "$PY_BUNDLE_DIR/bin/python3.12" "$NAMED_PYTHON_BIN"
 
+# Stub Info.plist next to the bundled interpreter. rumps's
+# notification subsystem reads CFBundleIdentifier from the
+# *running executable's* bundle (NSBundle.mainBundle()), and
+# because we exec into bin/MeroShare directly, mainBundle() is
+# the bin/ directory rather than the .app's Info.plist. Without a
+# CFBundleIdentifier here, rumps.notification raises
+# RuntimeError("Failed to setup the notification center"), which
+# kills the _check_updates and _drain_notifications threads on
+# every tick and floods menubar.log. Same identifier as the .app
+# so notification grouping in macOS Notification Center stays
+# consistent.
+cat > "$PY_BUNDLE_DIR/bin/Info.plist" <<'PLIST_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.meroshare.autoapply</string>
+    <key>CFBundleName</key>
+    <string>MeroShare Auto-Apply</string>
+</dict>
+</plist>
+PLIST_EOF
+
 # Sanity check the bundled Python before relying on it for pip.
 "$PYTHON_BIN" -c "import sys; print('  bundled Python:', sys.version.split()[0])"
 
