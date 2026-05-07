@@ -456,12 +456,58 @@ echo "  bundle size: $BUNDLE_SIZE"
 # ── Build the .dmg ───────────────────────────────────────────────────
 echo "→ Building $DMG_NAME"
 DMG_STAGE="$BUILD_DIR/dmg-stage"
+rm -rf "$DMG_STAGE"
 mkdir -p "$DMG_STAGE"
 # Use cp -R rather than mv so the build/ directory keeps the
 # original .app. Useful when iterating on the launcher and
 # re-running just the dmg step.
 cp -R "$APP_BUNDLE" "$DMG_STAGE/"
 ln -s /Applications "$DMG_STAGE/Applications"
+
+# A double-clickable rescue script for the "damaged" Gatekeeper
+# message that hits ad-hoc-signed apps after a browser download
+# on macOS Sequoia+. Strips com.apple.quarantine from the installed
+# .app and launches it. Lives inside the .dmg so users hitting the
+# error have a one-click fix without opening Terminal.
+RESCUE="$DMG_STAGE/If macOS says damaged — double-click me.command"
+cat > "$RESCUE" <<'RESCUE_EOF'
+#!/bin/bash
+# Removes the macOS quarantine flag from the installed app and opens it.
+# Needed because we ad-hoc-sign the bundle (no $99 Apple Developer ID).
+# After running once, the app launches normally on every future click.
+
+APP="/Applications/MeroShare Auto-Apply.app"
+if [ ! -d "$APP" ]; then
+    /usr/bin/osascript -e 'display dialog "MeroShare Auto-Apply isn'\''t in your Applications folder yet.\n\nDrag the app from this disk image into Applications first, then run this script." buttons {"OK"} default button 1 with icon caution'
+    exit 1
+fi
+/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+/usr/bin/open "$APP"
+RESCUE_EOF
+chmod +x "$RESCUE"
+
+# Plain-text README in the .dmg explaining the same thing in case
+# the user prefers reading to clicking.
+cat > "$DMG_STAGE/READ ME FIRST.txt" <<'README_EOF'
+MeroShare Auto-Apply — install
+==============================
+
+1. Drag "MeroShare Auto-Apply" onto the Applications folder.
+2. Open Applications and double-click the app.
+
+If macOS says: "MeroShare Auto-Apply.app is damaged and can't be
+opened" — that's not real damage. macOS rejects ad-hoc-signed
+apps that came through a browser download. To fix it once:
+
+   • Double-click "If macOS says damaged — double-click me.command"
+     (the file next to this README in the disk image), OR
+   • Open Terminal and paste:
+       xattr -dr com.apple.quarantine "/Applications/MeroShare Auto-Apply.app"
+
+After that, the app opens normally on every future click. The
+auto-updater handles future versions transparently — you only need
+to do this once per install.
+README_EOF
 
 if command -v create-dmg >/dev/null 2>&1; then
     create-dmg \

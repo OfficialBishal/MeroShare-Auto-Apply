@@ -25,7 +25,15 @@ Grab the latest release from [GitHub Releases](https://github.com/OfficialBishal
 - **macOS**: `MeroShare-Auto-Apply.dmg` — open it, drag the app to Applications, launch from Launchpad. The first launch needs ~30 seconds for the bundled browser engine to download. No Python install required.
 - **Windows**: `MeroShare-Auto-Apply-windows.zip` — extract anywhere, double-click `Run MeroShare Auto-Apply.bat`. The first launch installs dependencies (~2–5 minutes); subsequent launches are instant.
 
-On macOS, since the build is unsigned, **right-click the .app → Open → Open** the first time to bypass Gatekeeper. After that, double-click works normally.
+**On macOS Sequoia (and newer)**, double-clicking a freshly-downloaded build often shows *"MeroShare Auto-Apply.app is damaged and can't be opened"*. The `.app` isn't actually damaged — macOS refuses to run ad-hoc-signed binaries that came through the browser. One-time fix: open Terminal and paste the line below, then double-click the app normally.
+
+```
+xattr -dr com.apple.quarantine "/Applications/MeroShare Auto-Apply.app"
+```
+
+(On older macOS this may instead show "unidentified developer" — in that case right-click the .app → Open → Open does the same thing without Terminal.)
+
+If you want to skip this step on every download, the proper fix is to ship the build with an Apple Developer ID and notarize it ($99/year for the developer program). The build script has the hooks; if/when there's a cert, releases stop tripping Gatekeeper entirely.
 
 ### From source (developer path)
 
