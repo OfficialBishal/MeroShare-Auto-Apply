@@ -680,76 +680,51 @@ class ApplyCategoryValidationTests(_FlaskTestCase):
 
 
 class AllotmentNotificationTests(_FlaskTestCase):
-    """The Pending → Allotted transition fires a desktop notification
-    exactly once. Subsequent polls observing the same final state must
-    NOT re-fire (the worst kind of bug for a notification: spam after
-    the first happy moment)."""
-
-    def setUp(self):
-        super().setUp()
-        self._notifications = []
-        # Patch the import that _notify_allotment_changes uses lazily.
-        import auto_apply
-        self._notify_patch = mock.patch.object(
-            auto_apply, "notify",
-            side_effect=lambda title, msg: self._notifications.append((title, msg)),
-        )
-        self._notify_patch.start()
-
-    def tearDown(self):
-        self._notify_patch.stop()
-        super().tearDown()
+    """`_notify_allotment_changes` no longer fires desktop toasts —
+    notification spam on every allotment outcome (especially "not
+    allotted (refund coming)") was annoying. The function is kept
+    around because it persists state used elsewhere in the app, and
+    the tests pin (a) NO notify call ever happens and (b) state IS
+    written so a future re-enable wouldn't dump a flood of historical
+    transitions on first poll."""
 
     def _run(self, reports):
         app_module._notify_allotment_changes(reports)
 
-    def test_first_observation_of_final_status_does_not_notify(self):
-        # Fresh install sees an already-allotted issue. We should NOT
-        # toast — the user wasn't using this tool when allotment landed,
-        # so claiming "shares allotted!" would mislead.
-        self._run([{
-            "applicantFormId": 1, "detailStatus": "ALLOTED",
-            "companyName": "Test Bank", "accountName": "A",
-        }])
-        self.assertEqual(self._notifications, [])
+    def test_no_notification_on_any_transition(self):
+        # Even the happy "PENDING → ALLOTED" case must NOT call
+        # auto_apply.notify; the user opted out of allotment toasts.
+        import auto_apply
+        with mock.patch.object(auto_apply, "notify") as mock_notify:
+            self._run([{
+                "applicantFormId": 7, "detailStatus": "PENDING",
+                "companyName": "Test Bank", "accountName": "A",
+            }])
+            self._run([{
+                "applicantFormId": 7, "detailStatus": "ALLOTED",
+                "companyName": "Test Bank", "accountName": "A",
+            }])
+            self._run([{
+                "applicantFormId": 7, "detailStatus": "NOT ALLOTED",
+                "companyName": "Test Bank", "accountName": "A",
+            }])
+            mock_notify.assert_not_called()
 
-    def test_pending_to_allotted_fires_one_notification(self):
-        # First poll: pending. No notification (no transition).
+    def test_state_persisted_so_future_reenable_baselines_correctly(self):
+        # If notifications are ever re-enabled, the diff baseline has
+        # to be the latest observed status. Verify state persists.
         self._run([{
-            "applicantFormId": 7, "detailStatus": "PENDING",
-            "companyName": "Test Bank", "accountName": "A",
-            "appliedKitta": 50,
-        }])
-        self.assertEqual(self._notifications, [])
-        # Second poll: allotted. ONE notification.
-        self._run([{
-            "applicantFormId": 7, "detailStatus": "ALLOTED",
-            "companyName": "Test Bank", "accountName": "A",
-            "appliedKitta": 50,
-        }])
-        self.assertEqual(len(self._notifications), 1)
-        title, msg = self._notifications[0]
-        self.assertIn("allotted", title.lower())
-        self.assertIn("Test Bank", msg)
-
-    def test_allotted_status_does_not_re_fire_on_subsequent_polls(self):
-        self._run([{
-            "applicantFormId": 9, "detailStatus": "PENDING",
+            "applicantFormId": 11, "detailStatus": "PENDING",
             "companyName": "Bank", "accountName": "A",
         }])
+        state = accounts.load_allotment_state()
+        self.assertEqual(state["11"]["status"], "PENDING")
         self._run([{
-            "applicantFormId": 9, "detailStatus": "ALLOTED",
+            "applicantFormId": 11, "detailStatus": "ALLOTED",
             "companyName": "Bank", "accountName": "A",
         }])
-        self._run([{
-            "applicantFormId": 9, "detailStatus": "ALLOTED",
-            "companyName": "Bank", "accountName": "A",
-        }])
-        self._run([{
-            "applicantFormId": 9, "detailStatus": "ALLOTED",
-            "companyName": "Bank", "accountName": "A",
-        }])
-        self.assertEqual(len(self._notifications), 1)
+        state = accounts.load_allotment_state()
+        self.assertEqual(state["11"]["status"], "ALLOTED")
 
     def test_classifier_handles_meroshare_spelling_variants(self):
         # MeroShare has historically used "ALLOTED" (single t). Don't

@@ -667,20 +667,21 @@ def _classify_allotment(status: str) -> str:
 
 
 def _notify_allotment_changes(reports: list[dict]) -> None:
-    """Fire a desktop notification for each application whose status
-    moved from Pending → settled since the last poll.
+    """Persist allotment-status transitions to the state file.
 
-    Persists the final status per applicantFormId so the next call sees
-    no transition. If two clients hit /api/status concurrently, both
-    diff against the same baseline; whichever writes second wins. Worst
-    case: a duplicate toast. Acceptable trade vs. a cross-process lock
-    on a rarely-hit code path.
+    Originally also fired desktop notifications on each transition
+    (allotted / not allotted / finalized). Removed by user request:
+    the apply-time notification is the only one that's meaningful in
+    practice — allotment outcomes can be reviewed in the dashboard
+    and a toast for "not allotted" is just bad news pestering you.
+
+    The state file is still maintained so that if notifications are
+    ever re-enabled, the diff baseline is correct (otherwise turning
+    them on would dump a flood of "transitions" for everything that
+    happened to be settled at the moment of re-enable).
     """
     state = accounts.load_allotment_state()
     changed = False
-    # Lazy import to avoid a circular dependency at module load time
-    # (auto_apply imports app indirectly through accounts? — defensive).
-    from auto_apply import notify
     for r in reports:
         form_id = r.get("applicantFormId")
         if not form_id:
@@ -690,38 +691,6 @@ def _notify_allotment_changes(reports: list[dict]) -> None:
             continue
         prev_entry = state.get(str(form_id)) or {}
         prev_status = prev_entry.get("status", "")
-        # Only notify on transitions we actually OBSERVED — that is,
-        # we need a non-empty prior status that wasn't already final.
-        # First observation of an already-final state on a fresh install
-        # would otherwise misrepresent timing ("Shares allotted!" for
-        # something that was allotted a week ago, before the tool was
-        # ever pointed at this account). Better to silently record it.
-        if (
-            prev_status
-            and _is_final_allotment_status(current)
-            and not _is_final_allotment_status(prev_status)
-            and prev_status != current
-        ):
-            kind = _classify_allotment(current)
-            company = r.get("companyName") or r.get("companyShareName") or "an issue"
-            account_name = r.get("accountName") or "your account"
-            kitta = r.get("appliedKitta")
-            if kind == "allotted":
-                title = "Shares allotted!"
-                msg = f"{account_name}: {company}" + (f" ({kitta} kitta)" if kitta else "")
-            elif kind == "not_allotted":
-                title = "Not allotted (refund coming)"
-                msg = f"{account_name}: {company}"
-            else:
-                title = "Allotment finalized"
-                msg = f"{account_name}: {company} — {current}"
-            try:
-                notify(title, msg)
-            except Exception as e:
-                logger.warning("notify failed for form %s: %s", form_id, _safe_exc(e))
-        # Always update the recorded status, even when no notification
-        # fires (e.g. first observation of an already-final state on
-        # a fresh install). Otherwise we'd notify on the second poll.
         if current != prev_status:
             state[str(form_id)] = {
                 "status": current,

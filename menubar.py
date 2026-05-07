@@ -216,6 +216,53 @@ def _show_dialog(title: str, message: str) -> None:
         logger.warning("rumps.alert failed (%s)", e)
 
 
+def _patch_rumps_notification() -> None:
+    """Replace `rumps.notification` with an osascript-backed version.
+
+    Module-level monkey-patch because notification calls are scattered
+    across menubar.py and changing every call site is churn for a
+    behavior change that's the same everywhere — fall back to
+    osascript instead of trusting rumps's bundle lookup. Keeps the
+    rumps API surface (title/subtitle/message/sound kwargs) so the
+    rest of the file reads naturally.
+    """
+    def _patched(title="", subtitle="", message="", sound=False, **_):
+        _native_notification(title=title, message=message, subtitle=subtitle)
+    rumps.notification = _patched
+
+
+def _native_notification(title: str, message: str = "", subtitle: str = "") -> None:
+    """Fire a desktop notification via osascript.
+
+    `rumps.notification` reads `CFBundleIdentifier` from
+    `NSBundle.mainBundle()`, which for our exec-into-bundled-Python
+    layout resolves to the bundled interpreter's `bin/` directory
+    rather than the .app — rumps then raises and kills the calling
+    thread on every fire. osascript routes notifications through the
+    system event loop and doesn't care which binary's bundle is
+    "main", so it Just Works for any process layout.
+
+    The previous workaround (writing a stub Info.plist next to the
+    bundled Python) confused `codesign --deep` — it treated the
+    `bin/` directory as a sub-bundle to sign, which produced an
+    invalid manifest that macOS Launch Services rejected at .app
+    launch time. Removing the Info.plist plus this osascript path
+    sidesteps both bugs.
+    """
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    cmd = f'display notification "{_esc(message)}" with title "{_esc(title)}"'
+    if subtitle:
+        cmd += f' subtitle "{_esc(subtitle)}"'
+    try:
+        subprocess.run(
+            ["osascript", "-e", cmd],
+            check=False, capture_output=True, timeout=5,
+        )
+    except Exception as e:
+        logger.debug("osascript notification failed: %s", e)
+
+
 def _format_relative(iso_str: str | None) -> str:
     """Render an ISO timestamp as 'Xm ago' / 'in Xh' / etc.
 
@@ -270,6 +317,13 @@ def _interval_label(hours: int) -> str:
 # common buckets. Users wanting odd values can still set them via the
 # GUI Settings tab.
 SCHEDULE_INTERVAL_CHOICES = (1, 3, 6, 12, 24)
+
+
+# Apply the osascript-based notification shim once at import time.
+# Module-level so any code path firing notifications (including
+# library code that grabs `rumps.notification` early) hits the
+# patched version.
+_patch_rumps_notification()
 
 
 class MeroShareMenuBar(rumps.App):

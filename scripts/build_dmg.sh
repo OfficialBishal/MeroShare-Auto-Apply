@@ -168,29 +168,15 @@ fi
 NAMED_PYTHON_BIN="$PY_BUNDLE_DIR/bin/MeroShare"
 ln -f "$PY_BUNDLE_DIR/bin/python3.12" "$NAMED_PYTHON_BIN"
 
-# Stub Info.plist next to the bundled interpreter. rumps's
-# notification subsystem reads CFBundleIdentifier from the
-# *running executable's* bundle (NSBundle.mainBundle()), and
-# because we exec into bin/MeroShare directly, mainBundle() is
-# the bin/ directory rather than the .app's Info.plist. Without a
-# CFBundleIdentifier here, rumps.notification raises
-# RuntimeError("Failed to setup the notification center"), which
-# kills the _check_updates and _drain_notifications threads on
-# every tick and floods menubar.log. Same identifier as the .app
-# so notification grouping in macOS Notification Center stays
-# consistent.
-cat > "$PY_BUNDLE_DIR/bin/Info.plist" <<'PLIST_EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleIdentifier</key>
-    <string>com.meroshare.autoapply</string>
-    <key>CFBundleName</key>
-    <string>MeroShare Auto-Apply</string>
-</dict>
-</plist>
-PLIST_EOF
+# A previous version of this script wrote a stub Info.plist next to
+# the bundled interpreter to satisfy rumps's notification subsystem
+# (which reads CFBundleIdentifier from NSBundle.mainBundle()). That
+# Info.plist tricked `codesign --deep` into treating bin/ as a
+# sub-bundle and produced an invalid manifest — Launch Services
+# refused to launch the resulting .app. The fix is now in
+# menubar.py: a module-level monkey-patch routes rumps.notification
+# through osascript, which doesn't care about main-bundle layout.
+# So no Info.plist write here.
 
 # Sanity check the bundled Python before relying on it for pip.
 "$PYTHON_BIN" -c "import sys; print('  bundled Python:', sys.version.split()[0])"
@@ -393,8 +379,14 @@ ICON_TMP="$BUILD_DIR/icon.iconset"
 mkdir -p "$ICON_TMP"
 cat > "$BUILD_DIR/icon-src.svg" <<'SVG_EOF'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#5b8def"/>
-  <path d="M144 352V160l112 128 112-128v192" stroke="white" stroke-width="38" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Apple's macOS icon grid leaves ~10% padding on each side so
+       the rounded square fits inside the dock slot at the same
+       visual size as system apps. The previous version filled the
+       full 512x512 canvas and rendered noticeably bigger than
+       neighboring dock icons. Inset by 50px (= ~9.8%) per side and
+       scale the M proportionally. -->
+  <rect x="50" y="50" width="412" height="412" rx="92" fill="#5b8def"/>
+  <path d="M166 333V179l90 103 90-103v154" stroke="white" stroke-width="31" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
 SVG_EOF
 
@@ -440,18 +432,6 @@ mkdir -p "$(dirname "$MENUBAR_ICON")"
     && echo "  menubar-icon.png built (44×44)" \
     || echo "  menu bar icon generation failed; menu bar will be text-only"
 
-# ── Ad-hoc codesign the bundle ───────────────────────────────────────
-# Even without an Apple Developer cert, ad-hoc signing (`-s -`)
-# seals the bundle so macOS can detect tampering and so launchd
-# treats the binary correctly. Gatekeeper still requires the user
-# to right-click → Open on first launch, but signing avoids the
-# secondary "this app crashed because the signature changed" path
-# that hits when ad-hoc-running unsigned binaries on Apple Silicon.
-echo "→ Ad-hoc codesigning"
-/usr/bin/codesign --force --deep --sign - "$APP_BUNDLE" 2>&1 | tail -3 || {
-    echo "  codesign failed (continuing. Bundle is still functional)"
-}
-
 # ── Smoke-test the bundle ────────────────────────────────────────────
 echo "→ Validating bundle"
 test -x "$LAUNCHER_PATH" || { echo "launcher not executable"; exit 1; }
@@ -466,13 +446,42 @@ test -f "$APP_BUNDLE/Contents/Resources/app/app.py" || { echo "app.py missing"; 
 # Compile-time syntax check on every shipped .py so a typo doesn't
 # get distributed only to surface as a SyntaxError on first launch.
 # `compileall` walks the bundle's source tree, fails the build on
-# any error, and we discard the .pyc files since `__pycache__` is
-# stripped further down anyway.
+# any error, and we discard the .pyc files since they'd otherwise
+# get sealed into the codesign manifest below.
 echo "→ Syntax-checking bundled .py"
 "$PYTHON_BIN" -m compileall -q -f "$APP_BUNDLE/Contents/Resources/app" \
     || { echo "  syntax error in bundled source"; exit 1; }
 find "$APP_BUNDLE/Contents/Resources/app" -type d -name __pycache__ \
     -prune -exec rm -rf {} + 2>/dev/null || true
+
+# ── Ad-hoc codesign the bundle ───────────────────────────────────────
+# Even without an Apple Developer cert, ad-hoc signing (`-s -`) seals
+# the bundle so macOS can detect tampering and so launchd treats the
+# binary correctly. Gatekeeper still requires the user to right-click
+# → Open on first launch (or strip the quarantine xattr), but signing
+# avoids the secondary "this app crashed because the signature
+# changed" path that hits ad-hoc-running unsigned binaries on Apple
+# Silicon.
+#
+# CRITICAL: codesign MUST be the last step that touches the bundle's
+# contents. The previous version of this script ran codesign BEFORE
+# `compileall` — compileall then created __pycache__/.pyc files that
+# weren't in the signed manifest, and even after we deleted them the
+# bundle's resource hashes no longer matched. macOS Launch Services
+# rejected the .app at launch time with "a sealed resource is missing
+# or invalid", killing Python silently after exec. Symptom: the
+# launcher runs, the log file gets truncated by `>`, but no Python
+# output ever appears.
+echo "→ Ad-hoc codesigning"
+/usr/bin/codesign --force --deep --sign - "$APP_BUNDLE" 2>&1 | tail -3 || {
+    echo "  codesign failed (continuing. Bundle is still functional)"
+}
+# Verify the signature is internally consistent. Fails the build
+# rather than ship a bundle that Launch Services would reject.
+/usr/bin/codesign --verify --deep --strict "$APP_BUNDLE" 2>&1 | tail -3 || {
+    echo "  codesign verify failed; bundle would be rejected by macOS"
+    exit 1
+}
 
 BUNDLE_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)
 echo "  bundle size: $BUNDLE_SIZE"
