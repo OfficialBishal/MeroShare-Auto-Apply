@@ -10,6 +10,43 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.1]
+
+### Fixed
+
+- **False BOID-mismatch warning** in Settings → Accounts. The
+  verified line strict-equality-compared MeroShare's `boid` field
+  (long form, often leading-zero padded — `00297074` or
+  `1301060000297074`) with the user's stored username (short form,
+  `297074`). The two are deliberately different representations of
+  the same identity, so a correct match was always reported as a
+  mismatch. Replaced with a numeric/suffix comparison that ignores
+  leading zeros.
+- **Dock icon was a generic Python rocket** when "Show in Dock" was
+  toggled on. The .app launcher used `nohup … &` + `disown` to
+  detach Python; once the launcher process exited, macOS lost the
+  bundle association for the surviving Python process and couldn't
+  reach the bundle's `icon.icns`. Switched to `exec` so the Python
+  interpreter REPLACES the launcher in place. Side effect: Activity
+  Monitor now displays "MeroShare Auto-Apply" instead of "python3",
+  and an unexpected Python crash registers as the .app exiting
+  rather than leaving an orphan.
+- **Scheduler tests** previously required a `venv/bin/python3` on
+  disk to render the launchd plist. CI runners pip-install into the
+  system Python and have no venv, so all scheduler tests failed on
+  Linux runners (3.10–3.13). Extracted `_resolve_plist_python()` so
+  tests can pin `sys.executable` as the resolved interpreter
+  without the lookup hitting disk. Production behavior unchanged.
+- **Shutdown test race** that leaked a SIGINT into the test suite.
+  `test_signals_menu_bar_directly` mocked `subprocess.run` and
+  `os.kill` but not `threading.Thread`, so the spawned `_shutdown`
+  thread's 0.3s sleep outlived the `with`-block. After the patches
+  came off, `os.kill(getpid(), SIGINT)` fired for real, and CPython
+  3.13 happened to deliver that signal during a later test's
+  `os.fsync` — blowing up the whole suite with KeyboardInterrupt.
+  Fix: mock `Thread`, capture spawned targets, run `_signal_menubar`
+  synchronously, skip `_shutdown` (tested separately).
+
 ## [2026.05.07]
 
 ### Added — Security
@@ -200,5 +237,6 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.1...HEAD
+[2026.05.07.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07...v2026.05.07.1
 [2026.05.07]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/releases/tag/v2026.05.07
