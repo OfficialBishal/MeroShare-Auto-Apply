@@ -340,7 +340,7 @@ class MeroShareMenuBar(rumps.App):
         icon_path = str(ICON_PATH) if ICON_PATH.exists() else None
         super().__init__(
             name="MeroShare",
-            title="M",  # always-visible text fallback paired with template icon
+            title=None if icon_path else "MeroShare",  # icon-only when icon present
             icon=icon_path,
             template=True,  # auto-invert for light/dark menu bars
             # Single "Quit" item (replaces the previous two-button
@@ -653,13 +653,9 @@ class MeroShareMenuBar(rumps.App):
                 # is the rumps-native way to drop the text.
                 if ICON_PATH.exists():
                     try:
-                        # Keep a literal "M" next to the icon so the
-                        # menu bar always has a fallback if the icon
-                        # itself fails to paint (template-image quirks
-                        # under Ice / notch / Sequoia overflow). When
-                        # the icon paints normally, the user sees both;
-                        # when it doesn't, "M" still anchors the item.
-                        self.title = "M"
+                        # Clear the launch-time "Starting…" title so
+                        # the menu bar settles to icon-only.
+                        self.title = None
                     except Exception as e:
                         logger.debug("Could not clear menubar title: %s", e)
                 # Trigger an immediate refresh so the status header
@@ -685,9 +681,9 @@ class MeroShareMenuBar(rumps.App):
         # tick so the user has actionable feedback.
         if ICON_PATH.exists():
             try:
-                self.title = "M"
+                self.title = None
             except Exception as e:
-                logger.debug("Could not set menubar title: %s", e)
+                logger.debug("Could not clear menubar title: %s", e)
         # When Flask doesn't bind in time, the menu's status header
         # paints "Status: app stopped" on its next tick — that's the
         # surface the user sees. We deliberately do NOT toast a
