@@ -28,10 +28,23 @@ the bottom keep the diff between versions one click away.
   `nohup "$PYTHON" menubar.py … & disown; exit 0`. Bash exits
   cleanly so Launch Services treats the .app launch as complete;
   Python keeps running detached and its status item paints.
-- **Always-visible "M" text** in the menu bar alongside the icon —
-  defense in depth so even if the template-image rendering edge
-  cases (Sequoia, Ice, notch overflow) hide the icon, the text
-  anchors the item.
+- **First launch did nothing on a fresh install.** The launcher's
+  one-time Playwright Chromium pre-install used an `osascript`
+  Terminal popup whose `do script` body was built by interpolating
+  bash-escaped paths (`printf '%q'`) into an AppleScript `"…"`
+  string literal. Bash and AppleScript share `"…"` syntax but
+  disagree on `\` escaping inside it, so AppleScript rejected
+  every first-launch script with `syntax error: Expected """ but
+  found unknown token`. Combined with `set -e` at the top of the
+  launcher, the osascript failure aborted the launcher BEFORE the
+  `nohup … menubar.py` line, so the menu bar never started.
+  Fixed by dropping `osascript`+Terminal entirely and running the
+  Chromium download headless in the background (`( … ) &; disown`).
+  The menu bar now starts unconditionally; Playwright is only
+  needed at apply time, which is much later. If a user manages to
+  trigger an apply before the background install completes, the
+  existing apply-time error path surfaces "browser engine missing"
+  in the dashboard.
 
 ### Changed
 
@@ -39,6 +52,11 @@ the bottom keep the diff between versions one click away.
   for a problem this release finally resolves. Cask jumps from v3
   to v8; users who brew-installed any intermediate version will
   upgrade once and be done.
+- Menu bar item stays **icon-only** (no "M" text). An always-on
+  text fallback was prototyped during v8 development as a
+  diagnostic backstop while proving the launcher detach fix; it
+  was removed before ship — with the detach fix the icon paints
+  reliably, so the text was redundant and visually busy.
 
 ## [2026.05.07.7]
 
