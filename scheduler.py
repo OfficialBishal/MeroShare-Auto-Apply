@@ -35,24 +35,21 @@ class SchedulerError(RuntimeError):
     """Raised when launchctl or plist operations fail."""
 
 
-def _render_plist(interval_hours: int) -> str:
-    """Render the launchd plist for the given interval.
+def _resolve_plist_python() -> Path:
+    """Pick the Python interpreter the launchd plist will invoke.
 
-    Accepts any whole-hour value in 1..24. Raises ValueError outside
-    that range so we never write a misconfigured plist.
+    Two install shapes are supported:
+      1. Dev: ./venv/bin/python3 sits next to the source.
+      2. Bundled .app: a relocatable Python lives at
+         Contents/Resources/python/, parallel to the app source at
+         Contents/Resources/app/.
+
+    Raises SchedulerError if neither candidate is on disk. Pulled
+    out of `_render_plist` so tests can mock the resolver — CI
+    runners don't have a venv (they pip-install into the system
+    Python) and we shouldn't need a real venv on disk to exercise
+    plist rendering.
     """
-    if interval_hours not in VALID_INTERVALS:
-        raise ValueError(
-            f"interval_hours must be 1..24, got {interval_hours}"
-        )
-
-    # Pick the Python interpreter the plist will invoke. Two install
-    # shapes:
-    #   1. Dev: ./venv/bin/python3 sits next to the source.
-    #   2. Bundled .app: a relocatable Python lives at
-    #      Contents/Resources/python/, parallel to the app source at
-    #      Contents/Resources/app/.
-    # Try both; explode loudly if neither is present.
     python_candidates = [
         SOURCE_DIR / "venv" / "bin" / "python3",
         SOURCE_DIR.parent / "python" / "bin" / "python3",
@@ -64,6 +61,21 @@ def _render_plist(interval_hours: int) -> str:
         raise SchedulerError(
             f"could not find Python interpreter in any of: {python_candidates}"
         )
+    return python_path
+
+
+def _render_plist(interval_hours: int) -> str:
+    """Render the launchd plist for the given interval.
+
+    Accepts any whole-hour value in 1..24. Raises ValueError outside
+    that range so we never write a misconfigured plist.
+    """
+    if interval_hours not in VALID_INTERVALS:
+        raise ValueError(
+            f"interval_hours must be 1..24, got {interval_hours}"
+        )
+
+    python_path = _resolve_plist_python()
     script_path = SOURCE_DIR / "auto_apply.py"
     # launchd's WorkingDirectory + log paths live in the state dir -
     # which is writable, unlike the bundle's Resources/app/. Without

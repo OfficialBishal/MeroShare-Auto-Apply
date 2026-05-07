@@ -1,13 +1,35 @@
 """Tests for the dependency-free parts of scheduler.py."""
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
+import scheduler
 from scheduler import VALID_INTERVALS, _parse_last_run, _render_plist
 
 
 class RenderPlistTests(unittest.TestCase):
+    """`_render_plist` looks up `venv/bin/python3` or `../python/bin/python3`
+    on disk so the launchd plist points at a real interpreter. CI runners
+    don't have either (pip-install into system Python), so we substitute
+    the running test interpreter — guaranteed to exist — via a patch on
+    `_resolve_plist_python`.
+    """
+
+    def setUp(self):
+        # Tests exercise plist rendering, not interpreter lookup. Pin the
+        # path to sys.executable so the lookup never fails on CI.
+        self._patch = mock.patch.object(
+            scheduler, "_resolve_plist_python",
+            return_value=Path(sys.executable),
+        )
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+
     def test_produces_valid_xml(self):
         for hours in VALID_INTERVALS:
             with self.subTest(hours=hours):
