@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeroShare Auto-Apply</title>
+  <!-- Inline SVG favicon. No extra request, scales crisp on retina. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b8def'/%3E%3Cpath d='M9 22V10l7 8 7-8v12' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ boot_ts }}">
+</head>
+<body>
+
+  <header class="header">
+    <div class="brand">Mero<span class="accent">Share</span> Auto-Apply</div>
+    <nav class="nav" role="tablist" aria-label="Sections">
+      <button id="tab-dashboard" type="button" data-tab="dashboard" class="active" role="tab" aria-selected="true" aria-controls="page-dashboard">Dashboard</button>
+      <button id="tab-history" type="button" data-tab="history" role="tab" aria-selected="false" aria-controls="page-history">History</button>
+      <button id="tab-settings" type="button" data-tab="settings" role="tab" aria-selected="false" aria-controls="page-settings">Settings</button>
+      <button id="tab-logs" type="button" data-tab="logs" role="tab" aria-selected="false" aria-controls="page-logs">Logs</button>
+    </nav>
+    <div class="sync-meta" title="Last successful refresh">
+      <span id="syncDot" class="dot" aria-hidden="true"></span>
+      <span id="syncText">not synced</span>
+      <button id="refreshBtn" class="refresh-btn" title="Refresh all" aria-label="Refresh all">
+        <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M14 2v4h-4M2 14v-4h4" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M3.5 6.5A5 5 0 0 1 12.5 5L14 6.5M12.5 9.5A5 5 0 0 1 3.5 11L2 9.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button id="schedQuickBtn" class="refresh-btn" title="Background scheduler" aria-label="Background scheduler">
+        <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="8" cy="8" r="6"/>
+          <path d="M8 4.5v3.5l2.2 2.2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button id="closeQuickBtn" class="refresh-btn" title="Close this tab. App keeps running" aria-label="Close tab">
+        <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button id="quitQuickBtn" class="refresh-btn" title="Stop everything (app + scheduler)" aria-label="Stop everything">
+        <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M8 1.5v6.5" stroke-linecap="round"/>
+          <path d="M5 3.5a5 5 0 1 0 6 0" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Dashboard -->
+    <section class="page active" id="page-dashboard"
+             role="tabpanel" aria-labelledby="tab-dashboard">
+      <!-- Mounted dynamically when any account has CRN/password expiry
+           inside 30 days. Empty by default so it doesn't reserve space.
+           Test-login in Settings populates the data; warnings persist
+           across refreshes via localStorage. -->
+      <div id="expiryBanner"></div>
+
+      <!-- Scheduler health banner. Mounted only when the scheduler is
+           enabled AND its last run is suspiciously stale (>= ~1.5x its
+           interval). The whole product promise is "never miss an IPO" —
+           a silently dead scheduler must not be possible to overlook. -->
+      <div id="schedulerHealth"></div>
+
+      <!-- Lifetime stats card. Mounted when /api/status responds with
+           anything; shows applied / allotted / not-allotted / pending
+           counts so the user has a single line of "tool's actually
+           working for me." -->
+      <div id="statsCard"></div>
+
+      <div class="card">
+        <div class="card-title">Status</div>
+        <div class="card-row">
+          <div id="dashStatusText" style="font-size:13px;color:var(--muted);">Loading…</div>
+          <button type="button" class="btn btn-primary" id="runCheckBtn">Run check now</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Open Issues</span>
+          <span id="issuesCount" style="font-size:11px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;"></span>
+        </div>
+        <div id="issuesList"></div>
+      </div>
+    </section>
+
+    <!-- History -->
+    <section class="page" id="page-history"
+             role="tabpanel" aria-labelledby="tab-history">
+      <div class="card">
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <span>Recent Applications</span>
+          <span id="historyCount" style="font-size:11px;color:var(--muted);font-weight:500;text-transform:none;letter-spacing:0;"></span>
+        </div>
+        <div class="log-toolbar" id="historyToolbar" style="margin-bottom:12px;">
+          <button type="button" class="filter-btn active" data-filter="account" data-value="ALL" aria-pressed="true">All accounts</button>
+          <span style="color:var(--muted); margin: 0 4px;" aria-hidden="true">·</span>
+          <button type="button" class="filter-btn active" data-filter="status" data-value="ALL" aria-pressed="true">All statuses</button>
+          <button type="button" class="filter-btn" data-filter="status" data-value="Alloted" aria-pressed="false">Allotted</button>
+          <button type="button" class="filter-btn" data-filter="status" data-value="Not Alloted" aria-pressed="false">Not allotted</button>
+          <button type="button" class="filter-btn" data-filter="status" data-value="Verified" aria-pressed="false">Pending</button>
+          <button type="button" class="filter-btn" data-filter="status" data-value="Rejected" aria-pressed="false">Rejected</button>
+          <button type="button" class="filter-btn" data-filter="status" data-value="Edit Required" aria-pressed="false">Edit required</button>
+          <span style="flex:1;"></span>
+          <input type="search" id="historySearch" placeholder="Search company…" aria-label="Search company"
+                 style="padding:5px 10px;background:var(--bg);border:1px solid var(--border);border-radius:999px;color:var(--text);font-size:11px;width:140px;">
+          <button type="button" class="filter-btn" id="exportCsvBtn" title="Download as CSV">Export CSV</button>
+        </div>
+        <div id="historyList"></div>
+      </div>
+
+      <div class="section-heading">Local applied-cache</div>
+      <div class="card">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5;">
+          Issues we've recorded as already-applied locally. The scheduler skips
+          these without contacting MeroShare. Use <strong>Forget</strong> if our
+          record is wrong (e.g. an application that was rejected and refunded
+          but still shows here).
+        </div>
+        <div id="appliedCacheList"></div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section class="page" id="page-settings"
+             role="tabpanel" aria-labelledby="tab-settings">
+      <div class="section-heading">Accounts</div>
+      <div class="card">
+        <div id="accountsList" style="display:flex;flex-direction:column;gap:10px;"></div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-outline" id="addAccountBtn">+ Add account</button>
+          <button type="button" class="btn btn-outline" id="testAllBtn">Test all logins</button>
+        </div>
+      </div>
+
+      <div class="card" id="accountFormCard" style="display:none;">
+        <div class="card-title" id="accountFormTitle">Add account</div>
+        <input type="hidden" id="acct-id">
+        <div class="form-grid">
+          <div class="form-field span-2">
+            <label>Account name</label>
+            <input type="text" id="acct-name" placeholder='e.g. "Mine"' required minlength="1" maxlength="40">
+            <div class="form-help">A label for this account in the dashboard. "Mine", "Wife", "Mom" — anything you'll recognize. Not sent to MeroShare.</div>
+            <div class="form-error" id="err-acct-name"></div>
+          </div>
+          <div class="form-field">
+            <label>DP ID (numeric)</label>
+            <input type="text" id="acct-dp" placeholder="e.g. 10600" required pattern="[0-9]+" inputmode="numeric">
+            <div class="form-help">The 5-digit code in parentheses next to your broker on the MeroShare login dropdown. Example: "NIMB ACE CAPITAL LIMITED (10600)" → enter <strong>10600</strong>.</div>
+            <div class="form-error" id="err-acct-dp"></div>
+          </div>
+          <div class="form-field">
+            <label>Username</label>
+            <input type="text" id="acct-user" placeholder="e.g. 12345678" required minlength="1">
+            <div class="form-help">The number you type into MeroShare's <strong>Username</strong> field on the login screen — typically the last 6–7 digits of your full BOID. For example, a BOID of <code>1301010012345678</code> would have a username of <code>12345678</code>.</div>
+            <div class="form-error" id="err-acct-user"></div>
+          </div>
+          <div class="form-field">
+            <label>
+              Password
+              <button type="button" class="reveal-btn" data-target="acct-pass">show</button>
+            </label>
+            <input type="password" id="acct-pass" placeholder="MeroShare password" required minlength="1">
+            <div class="form-help">Your MeroShare login password. Stored in the OS keychain (encrypted by your login password), never in plain files.</div>
+            <div class="form-error" id="err-acct-pass"></div>
+          </div>
+          <div class="form-field">
+            <label>
+              Transaction PIN (4 digits)
+              <button type="button" class="reveal-btn" data-target="acct-pin">show</button>
+            </label>
+            <input type="password" id="acct-pin" placeholder="4-digit PIN" maxlength="4" required pattern="[0-9]{4}" inputmode="numeric">
+            <div class="form-help">The 4-digit PIN you enter on MeroShare's apply form (the last step before submission). Different from your login password.</div>
+            <div class="form-error" id="err-acct-pin"></div>
+          </div>
+          <div class="form-field span-2">
+            <label>CRN</label>
+            <input type="text" id="acct-crn" placeholder="e.g. CB1234567" required minlength="1">
+            <div class="form-help">Customer Reference Number from your bank. Visible on MeroShare's apply form when you start a new application — typically starts with letters then digits ("CB1234567"). Each bank account has its own CRN.</div>
+            <div class="form-error" id="err-acct-crn"></div>
+          </div>
+          <div class="form-field">
+            <label>Preferred bank (optional)</label>
+            <input type="text" id="acct-bank" placeholder="e.g. NIC ASIA. Leave blank for first available">
+            <div class="form-error" id="err-acct-bank"></div>
+          </div>
+          <div class="form-field">
+            <label>Preferred bank account (optional)</label>
+            <input type="text" id="acct-bank-account" placeholder="account number. Leave blank to pick first">
+            <div class="form-error" id="err-acct-bank-account"></div>
+          </div>
+          <div class="form-field span-2">
+            <label>Default kitta for this account (optional)</label>
+            <input type="number" id="acct-kitta" min="1" max="100000"
+                   placeholder="Blank uses the global default in Settings → Auto-apply">
+            <div class="form-help">Per-account override for IPO applications. Right shares always apply max-eligible regardless.</div>
+            <div class="form-error" id="err-acct-kitta"></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;">
+          <button type="button" class="btn btn-primary" id="saveAccountBtn">Save</button>
+          <button type="button" class="btn btn-outline" id="cancelAccountBtn">Cancel</button>
+        </div>
+      </div>
+
+      <div class="section-heading">Background scheduler</div>
+      <div class="card">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Run scheduled checks in the background</div>
+            <div class="toggle-desc">Runs even when this window is closed. Survives reboots.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="sched-toggle"><span class="slider"></span></label>
+        </div>
+        <div class="form-field" style="margin-top:14px;">
+          <label>Check every (hours, 1–24)</label>
+          <input type="number" id="sched-interval" min="1" max="24" value="6">
+        </div>
+        <div id="sched-status" style="font-size:12px;color:var(--muted);margin-top:10px;">Loading…</div>
+      </div>
+
+      <div class="section-heading">Share preferences</div>
+      <div class="card">
+        <div class="toggle-row">
+          <div><div class="toggle-label">IPO Ordinary Shares</div><div class="toggle-desc">Primary market offerings</div></div>
+          <label class="toggle"><input type="checkbox" id="pref-ipo" checked><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div><div class="toggle-label">Right Shares</div><div class="toggle-desc">Reserved shares for existing shareholders</div></div>
+          <label class="toggle"><input type="checkbox" id="pref-right" checked><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div><div class="toggle-label">FPO</div><div class="toggle-desc">Further Public Offerings</div></div>
+          <label class="toggle"><input type="checkbox" id="pref-fpo"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div><div class="toggle-label">Mutual Funds</div><div class="toggle-desc">Mutual fund schemes</div></div>
+          <label class="toggle"><input type="checkbox" id="pref-mf"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div><div class="toggle-label">Debentures</div><div class="toggle-desc">Bonds and debentures</div></div>
+          <label class="toggle"><input type="checkbox" id="pref-deb"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="section-heading">Application defaults</div>
+      <div class="card">
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Default kitta (for IPO)</label>
+            <input type="number" id="pref-kitta" value="10" min="1">
+          </div>
+          <div class="form-field">
+            <label>Max amount per application (Rs.)</label>
+            <input type="number" id="pref-maxamt" value="100000" min="100">
+          </div>
+        </div>
+        <div class="toggle-row" style="margin-top:6px;">
+          <div>
+            <div class="toggle-label">Apply maximum eligible for Right Shares</div>
+            <div class="toggle-desc">Reads the max-kitta attribute from the apply form when on.</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="pref-rightmax" checked><span class="slider"></span></label>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-primary" id="saveConfigBtn">Save settings</button>
+          <button type="button" class="btn btn-outline" id="resetConfigBtn">Reset to defaults</button>
+          <span class="saved-stamp" id="savedStamp"></span>
+        </div>
+      </div>
+
+      <div class="section-heading">Backup &amp; restore</div>
+      <div class="card">
+        <div class="card-row">
+          <div>
+            <div class="toggle-label">Export everything</div>
+            <div class="toggle-desc">Downloads accounts.json + .applied_issues.json bundled. Plaintext. Store somewhere safe.</div>
+          </div>
+          <button type="button" class="btn btn-outline" id="backupBtn">Download backup</button>
+        </div>
+        <div class="card-row" style="margin-top:14px;">
+          <div>
+            <div class="toggle-label">Restore from backup</div>
+            <div class="toggle-desc">Replaces all accounts and applied state with the contents of the chosen file. Cannot be undone.</div>
+          </div>
+          <input type="file" id="restoreFile" accept="application/json,.json" style="display:none;">
+          <button type="button" class="btn btn-outline" id="restoreBtn">Choose file…</button>
+        </div>
+      </div>
+
+      <div class="section-heading">Support development</div>
+      <div class="card">
+        <div class="card-row">
+          <div>
+            <div class="toggle-label">Like the tool? Buy me a coffee</div>
+            <div class="toggle-desc">This is a free, open-source project. If it's saved you time or money,
+              a small contribution helps keep it maintained when MeroShare changes break things.</div>
+          </div>
+          <a id="sponsorBtn" class="btn btn-outline"
+             href="https://github.com/sponsors/OfficialBishal"
+             target="_blank" rel="noopener">Sponsor on GitHub</a>
+        </div>
+        <div class="card-row" style="margin-top:14px;">
+          <div>
+            <div class="toggle-label">Need help with setup?</div>
+            <div class="toggle-desc">If you're not comfortable with terminal/Python, I offer a paid
+              30-minute setup-and-onboarding call. Drop me an email below.</div>
+          </div>
+          <a class="btn btn-outline" href="mailto:bishalmodern@gmail.com?subject=MeroShare%20Auto-Apply%20setup%20help">Email me</a>
+        </div>
+      </div>
+
+      <div class="section-heading">Server</div>
+      <div class="card">
+        <div class="card-row">
+          <div>
+            <div class="toggle-label">Stop everything</div>
+            <div class="toggle-desc">Shuts down both the GUI (localhost:5050) and the background scheduler. Run ./run.sh again to start fresh.</div>
+          </div>
+          <button type="button" class="btn btn-danger-outline" id="quitBtn">Stop everything</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Logs -->
+    <section class="page" id="page-logs"
+             role="tabpanel" aria-labelledby="tab-logs">
+      <div class="card">
+        <div class="card-title">Recent log lines</div>
+        <div class="log-toolbar" id="logToolbar">
+          <button type="button" class="filter-btn active" data-level="ALL" aria-pressed="true">All</button>
+          <button type="button" class="filter-btn" data-level="ERROR" aria-pressed="false">Error</button>
+          <button type="button" class="filter-btn" data-level="WARNING" aria-pressed="false">Warning</button>
+          <button type="button" class="filter-btn" data-level="INFO" aria-pressed="false">Info</button>
+          <span style="flex:1;"></span>
+          <button type="button" class="filter-btn" id="copyLogsBtn" title="Copy filtered log lines to clipboard">Copy</button>
+        </div>
+        <div class="log-box" id="logBox" role="log" aria-live="polite" aria-atomic="false">Loading…</div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    MeroShare Auto-Apply · build <time datetime="{{ boot_iso }}">{{ boot_human }}</time> ·
+    <a href="https://github.com/OfficialBishal/MeroShare-Auto-Apply" target="_blank" rel="noopener">github</a> ·
+    <a href="#" id="helpLink">help</a>
+  </footer>
+
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+
+  <script>window.__BOOT_TS__ = "{{ boot_ts }}";</script>
+  <script src="{{ url_for('static', filename='app.js') }}?v={{ boot_ts }}"></script>
+</body>
+</html>

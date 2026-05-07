@@ -1,0 +1,57 @@
+# Credentials - NEVER commit
+.env
+*.env
+!.env.example
+accounts.json
+
+# User-specific config (config.example.json is the public template)
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+env/
+.python-version
+
+# Test / lint / type-check artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs & State
+logs/
+*.log
+.applied_issues.json
+.playwright-mcp/
+
+# Local notes — not pushed
+docs/
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# pip noise
+pip-log.txt
+pip-delete-this-directory.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

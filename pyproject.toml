@@ -1,0 +1,38 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+# Files we don't author or want ruff to fight us on.
+extend-exclude = [
+    "venv",
+    "__pycache__",
+    ".playwright-mcp",
+]
+
+[tool.ruff.lint]
+# Conservative rule set — pick the families that catch real bugs
+# without flagging the project's existing style. We can tighten this
+# over time without retrofitting.
+#
+#   E, W:    pycodestyle (whitespace, syntax)
+#   F:       pyflakes    (undefined names, unused imports)
+#   B:       bugbear     (likely-bug patterns)
+#   UP:      pyupgrade   (modernize syntax — opt-in only when safe)
+#   PL:      pylint subset
+select = ["E", "W", "F", "B"]
+ignore = [
+    # The project intentionally has long log/notification strings and
+    # f-strings whose readability is more important than line length;
+    # rely on max-line-length=100 above and don't over-enforce.
+    "E501",
+    # `except Exception` is sometimes the right choice (best-effort
+    # logging, late-init imports) — prefer narrower catches but don't
+    # let ruff break the lint budget over it.
+    "B008",
+    # Mutable default args are flagged by B but the project doesn't
+    # have any in scope — keeping the rule on for safety.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use mock.patch.object liberally and locally-bound names.
+"tests/*" = ["F401", "F811"]

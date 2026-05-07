@@ -1,0 +1,23 @@
+requests>=2.31.0,<3
+schedule>=1.2.0,<2
+playwright>=1.40.0,<2
+flask>=3.0.0,<4
+# Pin werkzeug to the major Flask 3.x ships with. Without this, pip
+# would happily resolve werkzeug 1.x or a future 4.x that breaks the
+# imports app.py uses (request.headers, before_request, etc.).
+werkzeug>=3.0.0,<4
+# macOS menu bar app. Wraps Cocoa's NSStatusItem via PyObjC. The
+# `; sys_platform == "darwin"` marker keeps it off Windows / Linux
+# where the import would fail at install time.
+rumps>=0.4.0; sys_platform == "darwin"
+# OS-native keystore for password/CRN/PIN: macOS Keychain, Windows
+# Credential Manager, Linux Secret Service. Replaces plaintext storage
+# in accounts.json with platform-encrypted backing. Falls back to
+# plaintext + 0o600 when no keyring is available (e.g. headless Linux
+# without DBus).
+keyring>=25.0,<26
+# AES-GCM file encryption for accounts.json metadata (the non-credential
+# fields like dp_id/username/preferences). Provides a second layer over
+# the OS keystore: decrypting the file requires both filesystem access
+# AND the per-install key from the keystore.
+cryptography>=42.0,<49

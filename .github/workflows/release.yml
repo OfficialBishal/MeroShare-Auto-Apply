@@ -1,0 +1,80 @@
+name: release
+
+# Trigger on tag pushes matching `v*`. E.g. `v2026.05.04`. Tags get
+# stripped of the leading `v` by both build scripts when stamping the
+# version into _version.py, so the on-disk version matches what the
+# updater reads from the GitHub API.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  # Needed by softprops/action-gh-release to attach .dmg / .zip
+  # assets to the release entry on GitHub. Default GITHUB_TOKEN
+  # permissions for tag pushes vary by repo settings; declaring
+  # this explicitly means the workflow works regardless.
+  contents: write
+
+jobs:
+  # macOS build. Produces the .dmg with bundled Python and rumps.
+  # Runs on macos-latest because the build script depends on
+  # `iconutil`, `sips`, `plutil`, `hdiutil`. All built into macOS,
+  # none portable to Linux.
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so `git describe` resolves the tag
+
+      - name: Cache python-build-standalone tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/meroshare-build
+          # Bump this key when bumping PY_TAG in build_dmg.sh. The
+          # cache is keyed per-OS-arch since the tarballs differ.
+          key: pbs-${{ runner.os }}-${{ runner.arch }}-20241016
+
+      - name: Build .dmg
+        run: ./scripts/build_dmg.sh
+
+      - name: Upload .dmg to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          # Auto-generated notes are a fine starting point; the user
+          # can edit the release on GitHub to add a "What's changed"
+          # blurb before un-drafting it.
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  # Windows portable .zip. Cross-built on macOS (no Windows runner
+  # needed since we only download Python embeddable + zip the source).
+  # Putting it in the same workflow ensures both artifacts land in
+  # the same release, so the updater (and curious users) see them
+  # together.
+  build-windows-zip:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache Python embeddable
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/meroshare-build
+          key: pyembed-3.12.7
+
+      - name: Build Windows .zip
+        run: ./scripts/build_windows.sh
+
+      - name: Upload .zip to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: false
+          draft: false
+          prerelease: false

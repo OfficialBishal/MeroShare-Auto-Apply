@@ -1,0 +1,24 @@
+{
+  "share_types": {
+    "ipo_ordinary": true,
+    "right_share": true,
+    "fpo": false,
+    "mutual_fund": false,
+    "debenture": false,
+    "preferred_share": false
+  },
+  "auto_apply": {
+    "enabled": true,
+    "default_kitta": 10,
+    "right_share_apply_max": true,
+    "max_amount": 100000
+  },
+  "check_interval_hours": 6,
+  "notifications": {
+    "desktop": true,
+    "log_file": true
+  },
+  "security": {
+    "require_biometric_for_mutations": false
+  }
+}
