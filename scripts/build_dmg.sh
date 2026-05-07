@@ -372,6 +372,18 @@ cat > "$INFO_PLIST" <<EOF
          affordance for the app. -->
     <key>LSUIElement</key>
     <true/>
+    <!-- NSPrincipalClass=NSApplication is REQUIRED for our
+         NSStatusItem to actually show up when the bundle is launched
+         via Launch Services (Finder double-click, `open .app`). Without
+         it, AppKit doesn't fully initialize the bundle as a Cocoa app
+         and rumps's `statusItemWithLength_` silently returns an item
+         that never paints. Symptom: the menubar.py process is alive,
+         logs "Registered bundle icon for notifications + Dock", but no
+         M icon ever appears in the menu bar. Direct Python invocation
+         worked because that path doesn't go through Launch Services
+         and rumps initializes its own NSApplication. -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSBackgroundOnly</key>
