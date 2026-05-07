@@ -10,6 +10,23 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.6]
+
+### Fixed
+
+- **Launcher's existing-instance check matched too eagerly**,
+  causing Finder/`open` launches to silently no-op when any
+  unrelated process happened to have `menubar.py` somewhere in
+  its argv (a developer's editor, a debugger, a shell command).
+  The pattern `pgrep -f "[m]enubar.py"` matched that substring
+  anywhere in the command line, so the launcher decided a menu
+  bar app was already running, fired `open http://localhost:5050`,
+  and exited without spawning Python — leaving the user staring
+  at a menu bar that never appears. Tightened the pattern to
+  require `Resources/python/bin/MeroShare` immediately before
+  `menubar.py`, so only an actual in-bundle invocation counts as
+  an existing instance.
+
 ## [2026.05.07.5]
 
 ### Fixed
@@ -345,7 +362,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...HEAD
+[2026.05.07.6]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...v2026.05.07.6
 [2026.05.07.5]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.4...v2026.05.07.5
 [2026.05.07.4]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.4
 [2026.05.07.3]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.2...v2026.05.07.3
