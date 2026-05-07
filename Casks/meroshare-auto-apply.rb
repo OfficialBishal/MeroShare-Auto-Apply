@@ -17,6 +17,20 @@ cask "meroshare-auto-apply" do
 
   app "MeroShare Auto-Apply.app"
 
+  # Strip the macOS quarantine flag after install. The bundle is
+  # ad-hoc signed (no $99 Apple Developer ID), and macOS Sequoia
+  # rejects ad-hoc-signed apps that came through the quarantine
+  # flag with a "damaged and can't be opened" dialog — even when
+  # the signature is valid. The cask install path already verified
+  # the .dmg's SHA-256 against the formula, so stripping here just
+  # saves users from running `xattr -dr com.apple.quarantine`
+  # themselves after every install / upgrade.
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine",
+                          "#{appdir}/MeroShare Auto-Apply.app"]
+  end
+
   zap trash: [
     "~/Library/Application Support/MeroShare Auto-Apply",
     "~/Library/Logs/MeroShare Auto-Apply",
