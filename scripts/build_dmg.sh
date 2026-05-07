@@ -306,23 +306,35 @@ fi
 
 cd "$APP_DIR"
 
-# First-launch Chromium install. Playwright Chromium is needed
-# before any apply can succeed. Pre-install it now so the user
-# isn't blocked when they hit "Run Check Now" later. The Terminal
-# window is the most honest UX: the download is 150MB and takes a
-# minute or two; better visible than mysterious.
+# First-launch Chromium install (~150MB). Run it headless in the
+# background — the menu bar MUST start regardless of whether
+# Playwright finishes, because Playwright is only needed at apply
+# time (a much later user action). The previous version of this
+# block opened a Terminal window via osascript; that approach was
+# fatally fragile because:
+#   1. printf '%q' produces bash-style escapes (e.g. \  for spaces)
+#      and we interpolated them into an AppleScript "…" literal,
+#      which is a different language with different quoting rules.
+#      AppleScript rejected the script with a syntax error on every
+#      first launch.
+#   2. `set -e` at the top of this launcher meant the osascript
+#      failure aborted the entire launcher, so the menu-bar startup
+#      that comes 25 lines below never ran. Symptom: double-click
+#      the .app, nothing happens, no menu bar.
+# The fix is to skip osascript+Terminal entirely. We log to a file
+# the user can tail if they're curious, and surface "browser
+# missing" via the existing apply-time error path if they manage to
+# trigger an apply before the install finishes.
 PLAYWRIGHT_CACHE_DIR="$HOME/Library/Caches/ms-playwright"
 if [ ! -f "$PLAYWRIGHT_MARKER" ] \
    || ! ls "$PLAYWRIGHT_CACHE_DIR"/chromium-* >/dev/null 2>&1; then
-    APP_DIR_Q=$(printf '%q' "$APP_DIR")
-    PYTHON_Q=$(printf '%q' "$PYTHON")
-    MARKER_Q=$(printf '%q' "$PLAYWRIGHT_MARKER")
-    /usr/bin/osascript <<OS_EOF
-tell application "Terminal"
-    activate
-    do script "echo 'MeroShare Auto-Apply: one-time browser engine install (~150MB)…' && cd $APP_DIR_Q && $PYTHON_Q -m playwright install chromium && touch $MARKER_Q && echo '' && echo 'Setup complete. The menu bar icon (top-right) is your control surface. Close this Terminal when ready.'"
-end tell
-OS_EOF
+    (
+        cd "$APP_DIR" && \
+        "$PYTHON" -m playwright install chromium \
+            >"$LOGS_DIR/playwright-install.log" 2>&1 && \
+        touch "$PLAYWRIGHT_MARKER"
+    ) </dev/null >/dev/null 2>&1 &
+    disown
 fi
 
 # Spawn Python detached and let the bash launcher exit. Detaching
