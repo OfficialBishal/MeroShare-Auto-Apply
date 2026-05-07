@@ -360,6 +360,28 @@ class MeroShareMenuBar(rumps.App):
         self._notify_drain_timer = rumps.Timer(self._drain_notifications, 1.5)
         self._notify_drain_timer.start()
 
+        # Fast sentinel poll. The dashboard's "Stop everything" button
+        # writes a sentinel file AND tries to SIGTERM us via pgrep —
+        # but Python signal handlers are deferred until the VM yields,
+        # and the rumps event loop spends most of its time in a Cocoa
+        # runloop call where bytecode isn't running. The signal
+        # handler can sit pending for tens of seconds, leaving the
+        # menu bar visibly lingering after the user clicked Quit. A
+        # rumps.Timer DOES fire on the runloop directly (via NSTimer),
+        # so a 1-second sentinel check guarantees teardown within ~1s
+        # regardless of signal-handler timing.
+        self._sentinel_fast_timer = rumps.Timer(self._sentinel_check_tick, 1.0)
+        self._sentinel_fast_timer.start()
+
+        # Explicitly register the bundle's icon as the application
+        # icon image. NSUserNotification queries NSApp.applicationIconImage
+        # when rendering toast icons, and macOS occasionally caches a
+        # null/generic icon from a previous install (notably when the
+        # earlier launcher used `nohup … &` to detach Python and the
+        # orphaned process registered without a bundle association).
+        # Re-setting the image on every launch invalidates that cache.
+        self._refresh_app_icon_image()
+
         # SIGTERM handler: when the user clicks Settings → "Stop
         # everything" in the dashboard, /api/shutdown sends us SIGTERM
         # so the menu bar dies in lockstep with Flask. Without this,
@@ -640,6 +662,64 @@ class MeroShareMenuBar(rumps.App):
 
     def _update_tick(self, _sender) -> None:
         threading.Thread(target=self._check_updates, daemon=True).start()
+
+    def _sentinel_check_tick(self, _sender) -> None:
+        """Fast-poll the shutdown sentinel that the dashboard's
+        Stop-everything path writes. Runs on the rumps event loop, so
+        it doesn't suffer from Python's signal-handler deferral when
+        the main thread is parked in the Cocoa runloop.
+
+        The 30-second main `_tick` also checks the sentinel as a
+        backstop; this faster timer just makes the user-facing
+        latency match the click-to-disappear UX they expect.
+        """
+        SENTINEL_TTL_S = 5 * 60
+        try:
+            stat = SHUTDOWN_SENTINEL.stat()
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
+        age = time.time() - stat.st_mtime
+        if age >= SENTINEL_TTL_S:
+            return  # stale from a past crash, ignore
+        try:
+            SHUTDOWN_SENTINEL.unlink()
+        except OSError:
+            pass
+        logger.info("Shutdown sentinel observed (fast tick); exiting menu bar.")
+        if self._flask_proc and self._flask_proc.poll() is None:
+            try:
+                self._flask_proc.terminate()
+            except OSError:
+                pass
+        rumps.quit_application()
+
+    def _refresh_app_icon_image(self) -> None:
+        """Explicitly set NSApp.applicationIconImage from the bundle's
+        icon.icns so notifications and the Dock show the correct logo.
+
+        The bundle layout we expect:
+            …/MeroShare Auto-Apply.app/Contents/Resources/icon.icns
+            …/MeroShare Auto-Apply.app/Contents/Resources/app/menubar.py
+        So `BASE_DIR.parent / "icon.icns"` is the icon.
+
+        No-op if the icon file isn't where we expect (dev mode running
+        from source has no .icns; that's fine — the menu bar template
+        PNG is its own thing). Failures are swallowed — a wrong icon
+        is cosmetic, but a startup crash would be fatal.
+        """
+        try:
+            bundle_icns = BASE_DIR.parent / "icon.icns"
+            if not bundle_icns.exists():
+                return
+            from AppKit import NSApp, NSImage
+            img = NSImage.alloc().initByReferencingFile_(str(bundle_icns))
+            if img:
+                NSApp.setApplicationIconImage_(img)
+                logger.info("Registered bundle icon for notifications + Dock.")
+        except Exception as e:
+            logger.debug("Could not refresh app icon image: %s", e)
 
     def _drain_notifications(self, _sender) -> None:
         """Pull queued notifications from the cross-process JSONL queue

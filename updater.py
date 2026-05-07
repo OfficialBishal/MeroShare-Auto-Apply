@@ -118,7 +118,6 @@ def check_for_updates(
 
     `session` is for tests; production callers leave it None.
     """
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
     headers = {
         "Accept": "application/vnd.github+json",
         # GitHub requires a User-Agent on API calls; identifying the
@@ -126,31 +125,64 @@ def check_for_updates(
         "User-Agent": "MeroShare-Auto-Apply-Updater",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    try:
-        client = session or requests
-        resp = client.get(url, timeout=timeout_s, headers=headers)
-    except requests.RequestException as e:
-        logger.debug("Update check fetch failed: %s", e)
-        return None
+    client = session or requests
 
-    if resp.status_code == 404:
-        # Repo public but no releases yet. Totally fine, just no
-        # update available.
+    # Try /releases/latest first — that's the canonical endpoint and
+    # cheapest. Fall back to /releases (list) on 404, which we've
+    # observed on freshly-created repos where /releases/latest hasn't
+    # been indexed yet (the UI shows the "Latest" badge but the API
+    # endpoint returns 404 for several minutes after the first push).
+    # The list endpoint always works and the first entry is the most
+    # recent published release.
+    data = None
+    try:
+        resp = client.get(
+            f"https://api.github.com/repos/{repo}/releases/latest",
+            timeout=timeout_s, headers=headers,
+        )
+    except requests.RequestException as e:
+        logger.debug("Update check (latest) fetch failed: %s", e)
         return None
     if resp.status_code == 403:
-        # Almost always rate-limited. Quiet failure; we'll succeed
-        # next tick.
         logger.debug("Update check rate-limited (HTTP 403)")
         return None
-    if not resp.ok:
+    if resp.status_code == 404:
+        # Either the repo has no releases yet OR the /latest endpoint
+        # is lagging behind /releases. Try the list endpoint.
+        try:
+            list_resp = client.get(
+                f"https://api.github.com/repos/{repo}/releases",
+                timeout=timeout_s, headers=headers,
+            )
+        except requests.RequestException as e:
+            logger.debug("Update check (list fallback) fetch failed: %s", e)
+            return None
+        if not list_resp.ok:
+            logger.debug("Update check list fallback HTTP %s", list_resp.status_code)
+            return None
+        try:
+            releases = list_resp.json()
+        except ValueError:
+            return None
+        if not isinstance(releases, list) or not releases:
+            return None
+        # First non-draft, non-prerelease entry. The list is sorted
+        # newest-first, so the first match is the right one.
+        for r in releases:
+            if not r.get("draft") and not r.get("prerelease"):
+                data = r
+                break
+        if data is None:
+            return None
+    elif not resp.ok:
         logger.debug("Update check HTTP %s", resp.status_code)
         return None
-
-    try:
-        data = resp.json()
-    except ValueError:
-        logger.debug("Update check returned non-JSON")
-        return None
+    else:
+        try:
+            data = resp.json()
+        except ValueError:
+            logger.debug("Update check returned non-JSON")
+            return None
 
     tag = (data.get("tag_name") or "").strip()
     if not tag:
