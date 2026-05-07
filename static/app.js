@@ -758,6 +758,27 @@
     return Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
   }
 
+  // Compare what MeroShare returned for `boid` against the username
+  // the user stored at setup time. They are deliberately different
+  // representations of the same identity:
+  //   - MeroShare's `boid` field returns the long form, often with
+  //     leading-zero padding (e.g. "00297074" or "1301060000297074").
+  //   - The stored username is the short number the user types into
+  //     MeroShare's login screen (e.g. "297074") — typically the
+  //     last 6–7 digits of the BOID.
+  // A strict `===` would always fail. Match if either:
+  //   - they're numerically equal after stripping leading zeros, OR
+  //   - the server BOID ends with the user-typed username
+  //     (handles the long-form case "1301060000297074" / "297074")
+  // Returns true on match, false on a real mismatch.
+  function _boidMatchesUsername(serverBoid, username) {
+    if (!serverBoid || !username) return true;  // no signal, don't accuse
+    const stripLeadingZeros = (s) => String(s).replace(/^0+/, '') || '0';
+    const sb = stripLeadingZeros(serverBoid);
+    const su = stripLeadingZeros(username);
+    return sb === su || sb.endsWith(su);
+  }
+
   // Top-of-dashboard banner when any tested account has CRN/password
   // expiry within 30 days. Renders nothing when the test cache is
   // empty — first-time users without any "Test login" runs see no
@@ -988,7 +1009,7 @@
       const verifiedLine = t && t.ok
         ? `${t.name || 'verified'}`
           + (t.demat ? ' · DEMAT ' + t.demat : '')
-          + (t.boid && t.boid !== a.username ? ' · BOID mismatch: server says ' + t.boid : '')
+          + (t.boid && !_boidMatchesUsername(t.boid, a.username) ? ' · BOID mismatch: server says ' + t.boid : '')
           + ` · checked ${relTimeMs(t.ts)}`
         : t && !t.ok
           ? `login failed ${relTimeMs(t.ts)}`
