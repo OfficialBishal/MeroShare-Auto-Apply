@@ -288,7 +288,17 @@ fi
 # tear down the in-progress first launch and start over — making
 # the .app feel like it needs two clicks to open. Trusting the
 # existing instance is simpler AND avoids the race.
-EXISTING_MENUBAR_PID=$(/usr/bin/pgrep -f "[m]enubar.py" 2>/dev/null | head -1 || true)
+# Match only the bundled Python invoking menubar.py — not any
+# shell or editor process that happens to mention "menubar.py" in
+# its arguments. The previous pattern `[m]enubar.py` matched any
+# command line containing that substring (e.g. a developer's `vim
+# menubar.py`, a debugger session, or a CI command), which made
+# the launcher mistakenly bail with "open browser, exit 0" when
+# no real menu bar app was running. Anchoring on
+# `Resources/python/bin/MeroShare` ensures we only count actual
+# in-bundle invocations as "existing instances". The leading [m]
+# trick still avoids pgrep self-matching.
+EXISTING_MENUBAR_PID=$(/usr/bin/pgrep -f "Resources/python/bin/MeroShare [^ ]*[m]enubar\.py" 2>/dev/null | head -1 || true)
 if [ -n "$EXISTING_MENUBAR_PID" ]; then
     /usr/bin/open "http://localhost:5050" 2>/dev/null || true
     exit 0
