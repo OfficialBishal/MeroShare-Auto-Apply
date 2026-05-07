@@ -325,17 +325,28 @@ end tell
 OS_EOF
 fi
 
-# Launch the menu bar app via exec so the Python interpreter
-# REPLACES this launcher in the same process. Critical for the
-# Dock icon: macOS associates the bundle's icon.icns with the
-# .app's main-executable PID. The previous "nohup ... &" pattern
-# detached Python from the launcher, leaving Python as an orphan
-# whose Dock icon (when "Show in Dock" was toggled on) defaulted
-# to a generic Python rocket. With exec, the Python process IS
-# the .app's main executable: setActivationPolicy_(.regular)
-# from the menu picks up icon.icns correctly, Activity Monitor
-# shows "MeroShare Auto-Apply", and Cmd-Tab gets the right name.
-exec "$PYTHON" menubar.py >"$LOGS_DIR/menubar.log" 2>&1
+# Spawn Python detached and let the bash launcher exit. Detaching
+# is REQUIRED for the NSStatusItem to actually paint in the menu
+# bar — the previous `exec "$PYTHON" menubar.py` pattern kept
+# Python in the .app's launching context, and macOS Sequoia
+# silently suppresses status-bar items from processes that are
+# still attached to Launch Services' bundle activation lifecycle.
+# Symptom: process alive, NSStatusItem created with valid screen
+# coordinates per AppKit, but the menu bar shows nothing.
+# `nohup … & disown` releases the child from the bash launcher's
+# job table; bash exits cleanly so Launch Services treats the .app
+# launch as complete; Python keeps running as a standalone process
+# and its NSStatusItem becomes visible.
+#
+# Tradeoff: the .app's "Show in Dock" feature loses its bundle-icon
+# association because the running Python isn't the bundle's main
+# executable anymore. We accept that — a Dock icon is optional
+# polish; a visible menu bar icon is the entire product. The Dock
+# icon falls back to a generic Python rocket when "Show in Dock"
+# is on, which is acceptable since most users keep it off.
+nohup "$PYTHON" menubar.py >"$LOGS_DIR/menubar.log" 2>&1 &
+disown
+exit 0
 LAUNCHER_EOF
 chmod +x "$LAUNCHER_PATH"
 
@@ -374,14 +385,14 @@ cat > "$INFO_PLIST" <<EOF
     <true/>
     <!-- NSPrincipalClass=NSApplication is REQUIRED for our
          NSStatusItem to actually show up when the bundle is launched
-         via Launch Services (Finder double-click, `open .app`). Without
-         it, AppKit doesn't fully initialize the bundle as a Cocoa app
-         and rumps's `statusItemWithLength_` silently returns an item
+         via Launch Services (Finder double-click, open .app). Without
+         it, AppKit does not fully initialize the bundle as a Cocoa
+         app and rumps statusItemWithLength_ silently returns an item
          that never paints. Symptom: the menubar.py process is alive,
-         logs "Registered bundle icon for notifications + Dock", but no
-         M icon ever appears in the menu bar. Direct Python invocation
-         worked because that path doesn't go through Launch Services
-         and rumps initializes its own NSApplication. -->
+         logs "Registered bundle icon for notifications + Dock", but
+         no M icon ever appears in the menu bar. Direct Python
+         invocation works because that path does not go through
+         Launch Services and rumps initializes its own NSApplication. -->
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
