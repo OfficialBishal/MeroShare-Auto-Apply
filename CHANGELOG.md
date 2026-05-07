@@ -10,6 +10,34 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.05.07.4]
+
+### Fixed
+
+- **Menu bar startup was half-broken for everyone.** Three bugs
+  combined to make the .app come up looking dead even when the
+  process was running:
+  - `_set_dock_visibility` and `_refresh_app_icon_image` poked
+    `NSApp` directly in `__init__`, but `NSApp` is `None` until
+    `rumps.App.run()` spins up the Cocoa runloop. Both calls
+    silently `AttributeError`d on every launch — Show-in-Dock
+    never reapplied across restarts and the notification icon
+    cache never refreshed. Both calls now run from a one-shot
+    `rumps.Timer` after the runloop is alive.
+  - `/api/issues` returns `{}` during the Flask cold-start
+    window. The parser left `None` leak through to
+    `self._issues_state`, crashing `_render_status_lines` with
+    `'NoneType' is not iterable` on every subsequent tick. Both
+    branches now default to `[]`.
+  - `rumps.notification` raised `RuntimeError("Failed to setup
+    the notification center")` because the launcher exec's the
+    bundled Python directly, so `NSBundle.mainBundle()` resolved
+    to `Contents/Resources/python/bin/` rather than the .app.
+    The build now writes a stub `Info.plist` next to the bundled
+    interpreter with the same identifier as the .app, so rumps
+    finds a `CFBundleIdentifier` and stops killing the
+    update-check and notification-drain threads on every fire.
+
 ## [2026.05.07.3]
 
 ### Added
@@ -280,7 +308,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.4...HEAD
+[2026.05.07.4]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.4
 [2026.05.07.3]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.2...v2026.05.07.3
 [2026.05.07.2]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.1...v2026.05.07.2
 [2026.05.07.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07...v2026.05.07.1
