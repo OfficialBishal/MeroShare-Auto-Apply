@@ -1,6 +1,6 @@
 cask "meroshare-auto-apply" do
-  version "2026.05.07.8"
-  sha256 "3b327159e6419b3cfc8895d626b44ca16e36f0dffcab978da36dd679eae53860"
+  version "2026.07.01"
+  sha256 "51a9e735cca86067cfb347b4bba721282a60b3bdd60acc27284c2e4ba8d56342"
 
   url "https://github.com/OfficialBishal/MeroShare-Auto-Apply/releases/download/v#{version}/MeroShare-Auto-Apply.dmg"
   name "MeroShare Auto-Apply"
