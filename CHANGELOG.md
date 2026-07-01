@@ -10,6 +10,22 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.07.01.1]
+
+### Fixed
+
+- **Saved accounts no longer vanish on `brew upgrade`.** Secrets (each account's
+  password/CRN/PIN and the accounts.json encryption key) were stored only in the
+  macOS Keychain, whose access is tied to the app's code signature — and every
+  ad-hoc-signed rebuild is a *different* identity, so an upgraded build couldn't
+  read them and reset your accounts. Secrets are now stored in a 0600 file under
+  ~/Library/Application Support (which survives upgrades), with the Keychain kept
+  as a best-effort mirror. (Existing accounts on this upgrade must be re-entered
+  once; from here on they persist.)
+- **Menu bar no longer gets stuck on "loading…" or out of sync with the
+  dashboard.** A regression in v2026.07.01 tried to repaint the menu from a
+  background thread via a timer that never fired; reverted to the direct render.
+
 ## [2026.07.01]
 
 A correctness, safety, and security pass across the whole app, driven by a
@@ -489,7 +505,8 @@ green across Python 3.10–3.13).
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.07.01...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.07.01.1...HEAD
+[2026.07.01.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.07.01...v2026.07.01.1
 [2026.07.01]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.8...v2026.07.01
 [2026.05.07.8]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.8
 [2026.05.07.7]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...v2026.05.07.7
