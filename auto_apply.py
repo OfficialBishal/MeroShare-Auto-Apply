@@ -887,7 +887,14 @@ def run_daemon(config: dict, dry_run=False):
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
 
-    interval = config.get("check_interval_hours", 6)
+    # Validate the interval: a bad hand-edited config (0, null, "6h") must not
+    # busy-loop schedule.every() or crash the "%d hours" log.
+    try:
+        interval = int(config.get("check_interval_hours", 6))
+    except (TypeError, ValueError):
+        interval = 6
+    if interval < 1:
+        interval = 6
 
     logger.info("Starting daemon mode. Checking every %d hours.", interval)
     # Boot-ping notification removed by request. The menu bar status

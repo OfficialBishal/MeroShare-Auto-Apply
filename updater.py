@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import logging
 import platform
-import re
 from typing import Optional, TypedDict
 
 import requests
@@ -54,10 +53,13 @@ def _parse_version(s: str) -> tuple[int, ...]:
     Returning a tuple lets Python's tuple comparison do the work:
         _parse_version('2026.05.04') < _parse_version('2026.05.05')
     """
-    s = s.strip().lstrip("vV").split("+", 1)[0]
+    # Drop a pre-release suffix ('-rc1', '-beta') like we drop '+dev'. Splitting
+    # on '-' as a separator (the old behavior) made '2026.05.04-rc1' parse to
+    # (2026,5,4,0), which sorts ABOVE the final '2026.05.04' — backwards.
+    s = s.strip().lstrip("vV").split("+", 1)[0].split("-", 1)[0]
     if not s:
         return (0,)
-    parts = re.split(r"[.\-]", s)
+    parts = s.split(".")
     out = []
     for p in parts:
         try:

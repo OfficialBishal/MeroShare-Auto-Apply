@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import webbrowser
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -118,6 +118,10 @@ def _inject_boot_ts():
 # from there will reach this Flask process. The localhost bind alone
 # does not stop that; an Origin check does.
 _STATE_CHANGING_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+# GET endpoints that return plaintext secrets must ALSO pass the cross-origin
+# guard — otherwise a DNS-rebound attacker page can read them (they can read a
+# same-origin GET response, unlike a no-cors POST).
+_SENSITIVE_GET_PATHS = {"/api/backup"}
 _ALLOWED_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
 
@@ -135,7 +139,8 @@ def _is_local_origin(origin_or_referer: str | None) -> bool:
 
 @app.before_request
 def _guard_state_changing_requests():
-    if request.method not in _STATE_CHANGING_METHODS:
+    sensitive_get = request.method == "GET" and request.path in _SENSITIVE_GET_PATHS
+    if request.method not in _STATE_CHANGING_METHODS and not sensitive_get:
         return None
     # Threat model: a browser at evil.example does
     # `fetch('http://localhost:5050/api/factory-reset', {method: 'POST',
@@ -285,7 +290,10 @@ def has_any_account():
 # apply for that account. `?force=true` busts the cache.
 
 REPORT_TTL_SECONDS = 300
-APPLICABLE_TTL_SECONDS = 300
+# Kept short so a closed issue drops out of the menu bar / dashboard quickly
+# after MeroShare removes it from the applicable list. The menu bar polls every
+# 30s; a 120s TTL bounds the stale window to ~2 min without hammering logins.
+APPLICABLE_TTL_SECONDS = 120
 
 _report_lock = threading.Lock()
 _report_cache: dict = {}        # {account_id: (fetched_at_ts, {company_share_id_str: applicantFormId})}
@@ -340,6 +348,43 @@ def _applicable_put(account_id: str, issues: list) -> None:
 def _applicable_invalidate(account_id: str) -> None:
     with _applicable_lock:
         _applicable_cache.pop(account_id, None)
+
+
+# Asia/Kathmandu (UTC+05:45, no DST) — MeroShare's clock. MEROSHARE_TZ can
+# override for tests. Fixed offset so no tzdata is required.
+def _npt_tz():
+    name = os.environ.get("MEROSHARE_TZ", "").strip()
+    if name:
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return timezone(timedelta(hours=5, minutes=45), name="Asia/Kathmandu")
+
+
+def _issue_is_closed(issue: dict) -> bool:
+    """True only when we are CONFIDENT the issue's apply window has ended.
+
+    Conservative on purpose: any parse ambiguity returns False (keep showing
+    the issue). For a real-money tool, wrongly hiding a still-open issue (a
+    missed application) is worse than briefly showing one that just closed.
+    The close date is treated as END of that day in NPT, so an issue on its
+    close day is never dropped early.
+    """
+    raw = issue.get("issueCloseDate")
+    if not raw:
+        return False
+    try:
+        npt = _npt_tz()
+        dt = datetime.fromisoformat(str(raw).strip().replace(" ", "T"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=npt)
+        if (dt.hour, dt.minute, dt.second) == (0, 0, 0):
+            dt = dt.replace(hour=23, minute=59, second=59)
+        return dt < datetime.now(npt)
+    except (ValueError, TypeError):
+        return False
 
 
 def _lookup_share_price(issue_id: str, accounts_in_scope: list[dict]) -> float | None:
@@ -544,6 +589,13 @@ def api_issues():
             # Defensive: if the issue ended up with zero chips (no eligible
             # accounts, no local records) drop it rather than render an
             # empty row.
+            continue
+        # Drop an issue whose apply window has closed, UNLESS an account has an
+        # application recorded for it (so allotment/history stays visible). This
+        # makes a just-closed issue disappear immediately, even while the
+        # applicable-issues cache is still warm.
+        has_application = any(a["applied"] for a in applications.values())
+        if not has_application and _issue_is_closed(issue):
             continue
         # Forward the issue lifecycle dates and share price so the GUI
         # can render a "closes in N hours" urgency badge and a
@@ -974,6 +1026,11 @@ def api_delete_account(account_id):
         accounts.delete(account_id)
     except accounts.AccountError as e:
         return jsonify({"error": str(e)}), 404
+    # Drop the deleted account's cached report/eligibility so a same-named
+    # re-add can't be served another account's stale data, and to not leak
+    # per-account memory on churn (mirrors the api_apply success path).
+    _report_invalidate(account_id)
+    _applicable_invalidate(account_id)
     return jsonify({"status": "deleted"})
 
 

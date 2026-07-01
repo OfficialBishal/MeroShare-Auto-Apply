@@ -304,18 +304,29 @@ def _atomic_write(path: Path, content: str, mode: int | None = None) -> None:
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
+        # When a restrictive mode is requested (credential files), create the
+        # temp file with that mode from the START. The previous open()+chmod
+        # left a window where the plaintext-secrets temp existed world-readable
+        # under the default umask before the chmod ran.
+        if mode is not None:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+            try:
+                os.fchmod(fd, mode)  # force even if a stale tmp pre-existed looser
+            except OSError:
+                pass
+            f = os.fdopen(fd, "w")
+        else:
+            f = open(tmp, "w")
         # fsync the temp file before rename so a power-cut between
         # write and rename can't leave an empty/torn file. Without this,
         # POSIX is allowed to defer the data write past the rename.
-        with open(tmp, "w") as f:
+        with f:
             f.write(content)
             f.flush()
             try:
                 os.fsync(f.fileno())
             except OSError:
                 pass  # not all filesystems support fsync (e.g. tmpfs)
-        if mode is not None:
-            os.chmod(tmp, mode)
         os.replace(tmp, path)
     except OSError:
         try:

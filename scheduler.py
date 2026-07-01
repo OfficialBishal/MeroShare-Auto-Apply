@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 import accounts
 
@@ -85,6 +86,14 @@ def _render_plist(interval_hours: int) -> str:
     log_dir.mkdir(parents=True, exist_ok=True)
     interval_seconds = interval_hours * 3600
 
+    # XML-escape every interpolated path. A data dir under a home folder
+    # containing &, < or > (e.g. "Tom & Jerry") would otherwise produce a
+    # malformed plist that launchctl refuses to load.
+    py = _xml_escape(str(python_path))
+    script = _xml_escape(str(script_path))
+    state = _xml_escape(str(STATE_DIR))
+    logs = _xml_escape(str(log_dir))
+
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -94,21 +103,21 @@ def _render_plist(interval_hours: int) -> str:
 
     <key>ProgramArguments</key>
     <array>
-        <string>{python_path}</string>
-        <string>{script_path}</string>
+        <string>{py}</string>
+        <string>{script}</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>{STATE_DIR}</string>
+    <string>{state}</string>
 
     <key>StartInterval</key>
     <integer>{interval_seconds}</integer>
 
     <key>StandardOutPath</key>
-    <string>{log_dir}/launchd_stdout.log</string>
+    <string>{logs}/launchd_stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>{log_dir}/launchd_stderr.log</string>
+    <string>{logs}/launchd_stderr.log</string>
 
     <key>RunAtLoad</key>
     <true/>
@@ -123,7 +132,7 @@ def _render_plist(interval_hours: int) -> str:
              logs back to the bundle's Resources/, breaking on read-only
              installs. -->
         <key>MEROSHARE_DATA_DIR</key>
-        <string>{STATE_DIR}</string>
+        <string>{state}</string>
     </dict>
 </dict>
 </plist>
@@ -239,15 +248,27 @@ _NO_APPLY_RE = re.compile(r"No new applications made this run\.?")
 def _parse_last_run(log_path: Path = LOG_FILE) -> tuple[str | None, str | None]:
     """Return (timestamp, summary) for the most recent check.
 
-    Reads the last ~200 lines of the log and walks backwards to find the
-    most recent `Checking ... at ...` line (either the single-account
-    legacy form or the per-account multi-account form). Then scans
-    forward from there for either an `Applied for: ...` or
-    `No new applications made this run.` line. Returns (None, None) if
-    no check line is found.
+    Scans the current log's tail; if no check line is found (e.g. right after
+    a RotatingFileHandler rollover the latest "Checking..." line sits in
+    meroshare.log.1 while the fresh file has none yet), falls back to the .1
+    backup so a healthy scheduler isn't briefly reported as "no runs yet".
+    """
+    ts, summary = _scan_log_for_check(log_path)
+    if ts is not None:
+        return ts, summary
+    backup = log_path.with_name(log_path.name + ".1")
+    if backup.exists():
+        return _scan_log_for_check(backup)
+    return None, None
 
-    Reads only the file tail (~64KB) instead of slurping the whole 2MB
-    log into memory. The GUI's status panel polls every 5s.
+
+def _scan_log_for_check(log_path: Path) -> tuple[str | None, str | None]:
+    """Scan one log file's ~64KB tail for the most recent check line.
+
+    Walks backwards to find the most recent `Checking ... at ...` line (either
+    the single-account legacy form or the per-account multi-account form), then
+    scans forward for an `Applied for: ...` / `No new applications` summary.
+    Returns (None, None) if no check line is found.
     """
     if not log_path.exists():
         return None, None
@@ -325,9 +346,16 @@ def status() -> dict:
         from datetime import datetime, timedelta
         try:
             dt = datetime.strptime(last_run, "%Y-%m-%d %H:%M:%S")
-            next_run = (dt + timedelta(hours=interval_hours)).strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+            nxt = dt + timedelta(hours=interval_hours)
+            # If the machine slept past a tick, last_run + interval can already
+            # be in the past. Advance by whole intervals so we never present a
+            # "next run" that has already elapsed (which rendered as "next Xh ago").
+            now = datetime.now()
+            if nxt <= now:
+                elapsed = (now - dt).total_seconds()
+                periods = int(elapsed // (interval_hours * 3600)) + 1
+                nxt = dt + timedelta(hours=interval_hours * periods)
+            next_run = nxt.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
             pass
 

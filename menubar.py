@@ -848,12 +848,13 @@ class MeroShareMenuBar(rumps.App):
         # concurrent threads).
         new_scheduler = self._api("/api/scheduler") or {}
         new_accounts = self._api("/api/accounts") or []
-        issues_resp = self._api("/api/issues") or {}
-        # /api/issues returns {"issues": [...]} on the happy path, but a
-        # cold-start Flask can briefly return {}. The `or []` here
-        # handles both: missing key → None → [], and non-dict → bare
-        # list. The previous form left `or []` only on the else
-        # branch and let None leak through to _render_status_lines.
+        issues_resp = self._api("/api/issues")
+        # /api/issues returns a bare list on success (possibly empty). A non-2xx
+        # response (401 all-logins-failed, 400 no accounts, 500) makes _api
+        # return None — that's an ERROR, not "no open issues". Capture it so the
+        # menu bar can say "couldn't load" instead of masking a login failure as
+        # an empty list. (A cold-start {} still resolves to an empty list.)
+        issues_error = issues_resp is None
         if isinstance(issues_resp, dict):
             new_issues = issues_resp.get("issues") or []
         else:
@@ -866,12 +867,14 @@ class MeroShareMenuBar(rumps.App):
         # online transition, force a repaint regardless.
         sched_changed = was_offline or new_scheduler != self._scheduler_state
         accts_changed = was_offline or new_accounts != self._accounts_state
-        issues_changed = was_offline or new_issues != self._issues_state
+        issues_changed = (was_offline or new_issues != self._issues_state
+                          or issues_error != getattr(self, "_issues_error", False))
         config_changed = was_offline or new_config != self._config_state
 
         self._scheduler_state = new_scheduler
         self._accounts_state = new_accounts
         self._issues_state = new_issues
+        self._issues_error = issues_error
         self._config_state = new_config
 
         # Status lines are cheap; always re-render so "X minutes ago"
@@ -907,6 +910,7 @@ class MeroShareMenuBar(rumps.App):
         # short-circuits in _refresh_all would otherwise compare
         # against stale state).
         self._issues_state = []
+        self._issues_error = False
         self._accounts_state = []
         # The "Update Available" item title is sticky between
         # update-check ticks. If we previously detected an update and
@@ -918,39 +922,58 @@ class MeroShareMenuBar(rumps.App):
 
     def _render_status_lines(self) -> None:
         sched = self._scheduler_state
-        if sched.get("enabled"):
-            interval = sched.get("interval_hours")
-            last = sched.get("last_result") or "no runs yet"
+        enabled = sched.get("enabled")
+        interval = sched.get("interval_hours")
+        last_run = sched.get("last_run")
+        next_run = sched.get("next_run")
+        last_result = sched.get("last_result")
+
+        if enabled:
+            # Guard the interval: a loaded agent whose plist was deleted/edited
+            # yields interval_hours=None — don't print "every Noneh".
             self._status_line.title = (
-                f"Status: scheduler on, every {interval}h"
+                f"Status: scheduler on, every {interval}h" if interval
+                else "Status: scheduler on"
             )
-            last_run = sched.get("last_run")
-            next_run = sched.get("next_run")
-            parts = []
-            if last_run:
-                parts.append(f"last run {_format_relative(last_run)}")
-            if next_run:
-                parts.append(f"next {_format_relative(next_run)}")
-            if last and len(last) <= 80:
-                parts.append(last)
-            self._next_run_line.title = "  " + (" · ".join(parts) or "-")
         else:
             self._status_line.title = "Status: scheduler off"
-            self._next_run_line.title = "  not scheduled"
+
+        # Show last/next check whenever we actually have them, regardless of
+        # whether the launchd agent is loaded. A manual or one-shot check still
+        # writes a "Checking ... at ..." line the scheduler parses, so a user
+        # who never enabled launchd still gets a real "last check" time.
+        parts = []
+        if last_run:
+            parts.append(f"last check {_format_relative(last_run)}")
+        if next_run:
+            parts.append(f"next {_format_relative(next_run)}")
+        elif not enabled:
+            parts.append("not scheduled")
+        if last_result and len(last_result) <= 80:
+            parts.append(last_result)
+        self._next_run_line.title = "  " + (" · ".join(parts) or "no checks yet")
 
         # Issue count read from the per-account response; sum unique
         # companyShareIds so a single issue applicable to N accounts
-        # counts once.
-        unique = {
-            str(i.get("companyShareId") or i.get("id") or "")
-            for i in self._issues_state if i
-        } - {""}
-        self._issue_count_line.title = f"Open issues: {len(unique)}"
+        # counts once. On a load error show "—" rather than a false 0.
+        if getattr(self, "_issues_error", False):
+            self._issue_count_line.title = "Open issues: —"
+        else:
+            unique = {
+                str(i.get("companyShareId") or i.get("id") or "")
+                for i in self._issues_state if i
+            } - {""}
+            self._issue_count_line.title = f"Open issues: {len(unique)}"
 
     # ── Issues submenu ─────────────────────────────────────────────
 
     def _render_issues_submenu(self) -> None:
         self._reset_submenu(self._issues_menu)
+        if getattr(self, "_issues_error", False):
+            # Login/report failure — do NOT show "(no open issues)", which would
+            # falsely reassure the user nothing is open.
+            self._issues_menu.add(rumps.MenuItem("(couldn't load — check accounts in Settings)"))
+            return
         issues = self._issues_state or []
         if not issues:
             self._issues_menu.add(rumps.MenuItem("(no open issues)"))
