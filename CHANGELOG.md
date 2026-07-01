@@ -10,6 +10,50 @@ the bottom keep the diff between versions one click away.
 
 ## [Unreleased]
 
+## [2026.07.01]
+
+A correctness, safety, and security pass across the whole app, driven by a
+multi-lens audit. Everything below is covered by the test suite (5 CI jobs
+green across Python 3.10–3.13).
+
+### Fixed
+
+- **Menu bar showed stale "open issues" that had already closed**, and showed
+  **no "last check" / "next check" time** unless the launchd scheduler was
+  loaded. Closed issues now drop out quickly (shorter cache + a close-date
+  filter), and last/next-check times show whenever a check has actually run —
+  scheduled or manual.
+- **Cross-process double-submission is now impossible.** The launchd daemon, the
+  dashboard, and the CLI `--apply` share a single apply mutex, so the same issue
+  can never be submitted twice by overlapping runs.
+- **`max_amount` is a real guardrail.** It snaps the applied kitta to a valid lot
+  within your budget and refuses to apply (rather than failing) when the budget
+  can't cover even the minimum. `apply_max` warns instead of silently applying
+  the minimum when the form's max is unreadable.
+- **Partial account failures are visible.** When some accounts log in but others
+  fail, the dashboard and menu bar now say so instead of silently hiding the
+  failed account's issues.
+- Menu-bar rendering and quit are marshalled to the main thread; Flask can no
+  longer be double-spawned at launch; issue chips distinguish "unknown" accounts
+  from "not applied".
+- Scheduler "next check" is never shown in the past; timestamps are
+  timezone-safe across hosts; log rotation no longer hides the last run.
+- Update check no longer ranks a pre-release above the final release.
+
+### Security
+
+- `GET /api/backup` (which returns plaintext credentials) is now behind the same
+  cross-origin guard as the write endpoints — a DNS-rebound web page can no
+  longer read it.
+- Credential files are written `0600` from creation (no world-readable window),
+  and the launchd plist XML-escapes paths.
+- Run-check no longer logs tracebacks that could echo credentials.
+
+### Changed
+
+- `/api/issues` now returns an envelope `{issues, failedAccounts, partial}`
+  instead of a bare list, so partial failures can be surfaced.
+
 ## [2026.05.07.8]
 
 ### Fixed
@@ -445,7 +489,8 @@ the bottom keep the diff between versions one click away.
   with zero code change (see README "Run the dashboard as a real Mac
   app").
 
-[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.8...HEAD
+[Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.07.01...HEAD
+[2026.07.01]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.8...v2026.07.01
 [2026.05.07.8]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.8
 [2026.05.07.7]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...v2026.05.07.7
 [2026.05.07.6]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...v2026.05.07.6
