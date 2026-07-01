@@ -832,7 +832,15 @@ def api_apply(issue_id):
         return jsonify({"error": "Another task is running"}), 409
 
     def do_apply():
+        # Cross-process apply mutex: never submit while the scheduled daemon (or
+        # another apply run) is mid-apply. Manual enter/exit keeps the existing
+        # loop body unindented.
+        _apply_lock = accounts.try_apply_engine_lock()
         try:
+            _apply_ok = _apply_lock.__enter__()
+            if not _apply_ok:
+                _bg_set(message="Another apply run is already in progress. Try again in a moment.")
+                return
             for idx, account in enumerate(targets, 1):
                 _bg_set(message=f"Applying for issue {issue_id} on {account['name']} ({idx}/{len(targets)})…")
                 # Per-account default_kitta beats the global config so
@@ -899,6 +907,10 @@ def api_apply(issue_id):
                 successes = sum(1 for r in _bg_status["results"].values() if r.get("success"))
             _bg_set(message=f"Done. {successes}/{len(targets)} account(s) applied")
         finally:
+            try:
+                _apply_lock.__exit__(None, None, None)
+            except Exception:
+                pass
             _bg_set(running=False)
 
     thread = threading.Thread(target=do_apply, daemon=True)

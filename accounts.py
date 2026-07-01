@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 import contextlib
 import errno
-import fcntl
 import json
 import logging
 import os
@@ -23,6 +22,11 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+try:
+    import fcntl  # POSIX only
+except ImportError:  # Windows: no fcntl. Cross-process locks degrade to no-op;
+    fcntl = None     # _atomic_write + the in-process locks still protect callers.
 
 import secrets_store
 
@@ -128,6 +132,12 @@ ACCOUNTS_FILE = STATE_DIR / "accounts.json"
 ENV_FILE = STATE_DIR / ".env"
 APPLIED_FILE = STATE_DIR / ".applied_issues.json"
 APPLIED_LOCK_FILE = STATE_DIR / ".applied_issues.lock"
+# Serializes the whole real-money apply engine across processes (the launchd
+# daemon, a one-shot CLI run, the GUI's run-check worker, and the GUI's
+# single-issue /api/apply). Distinct from APPLIED_LOCK_FILE, which guards only
+# the applied-state file write — this one spans decide → submit → record so two
+# processes can't both pass the "already applied?" check and double-submit.
+APPLY_ENGINE_LOCK_FILE = STATE_DIR / ".apply-engine.lock"
 # Tracks the last-seen `statusName` per applicantFormId so the GUI/daemon
 # can fire desktop notifications exactly once on status transitions
 # (Pending → Allotted / Not Allotted), not every poll. Map shape:
@@ -184,6 +194,9 @@ def _file_lock(path: Path, *, timeout: float = 10.0):
     no-op. The threading lock plus _atomic_write still protects
     intra-process callers.
     """
+    if fcntl is None:  # Windows / no fcntl: no cross-process lock available.
+        yield
+        return
     try:
         path.touch(exist_ok=True)
         fd = os.open(path, os.O_RDWR)
@@ -224,6 +237,55 @@ def _file_lock(path: Path, *, timeout: float = 10.0):
 # concurrent CRUD requests from the GUI can't race load() -> append ->
 # save_all() and lose one of the writes.
 _accounts_lock = threading.RLock()
+
+# In-process half of the apply-engine mutex (guards threads within one Flask
+# process; the fcntl lock below adds the cross-process half). Non-reentrant.
+_apply_engine_thread_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def try_apply_engine_lock():
+    """Non-blocking mutex for the real-money apply engine.
+
+    Yields True if the caller may proceed to apply, or False if another
+    thread/process is already applying (caller should skip/reject rather than
+    risk a duplicate submission). Never blocks. On a filesystem where the
+    lockfile can't be opened it degrades to the in-process lock only.
+    """
+    if not _apply_engine_thread_lock.acquire(blocking=False):
+        yield False
+        return
+    fd = None
+    try:
+        if fcntl is None:  # Windows / no fcntl: in-process (thread) lock only.
+            yield True
+            return
+        try:
+            APPLY_ENGINE_LOCK_FILE.touch(exist_ok=True)
+            fd = os.open(APPLY_ENGINE_LOCK_FILE, os.O_RDWR)
+        except OSError as e:
+            logger.debug("apply-engine lockfile unavailable (%s); thread lock only", e)
+            yield True
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            fd = None
+            yield False
+            return
+        yield True
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        _apply_engine_thread_lock.release()
 
 
 class AccountError(Exception):

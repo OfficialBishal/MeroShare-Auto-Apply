@@ -315,6 +315,33 @@ def notify(title, message):
 
 
 def check_and_apply(config: dict, dry_run=False, results: dict | None = None):
+    """Apply engine entry point — serialized across processes.
+
+    Holds a non-blocking cross-process mutex for the whole run so the launchd
+    daemon, a CLI one-shot, and the GUI's run-check can never overlap and
+    double-submit the same issue. If another apply is already running, this run
+    is skipped (it will retry on the next tick). Dry runs don't submit, so they
+    bypass the mutex.
+    """
+    if dry_run:
+        return _check_and_apply_impl(config, dry_run=True, results=results)
+    with accounts.try_apply_engine_lock() as acquired:
+        if not acquired:
+            logger.warning(
+                "Another apply run is already in progress; skipping this cycle."
+            )
+            if results is not None:
+                results["_skipped"] = {
+                    "accountName": "—",
+                    "success": False,
+                    "message": "Skipped: another apply run is already in progress.",
+                    "applied": [],
+                }
+            return []
+        return _check_and_apply_impl(config, dry_run=False, results=results)
+
+
+def _check_and_apply_impl(config: dict, dry_run=False, results: dict | None = None):
     """Log in per account, check for matching issues, and apply via browser.
 
     `results`, if given, is mutated in place with per-account outcomes in
@@ -844,28 +871,35 @@ def apply_single(issue_id: str, config: dict, account_id: str | None = None):
     )
     max_amount = auto_config.get("max_amount") or None
     print("  Applying via browser...")
-    result = apply_via_browser(
-        int(issue_id), headless=False,
-        default_kitta=default_kitta,
-        credentials=primary,
-        apply_max=apply_max,
-        max_amount=max_amount,
-        share_price=share_price,
-    )
+    # Same cross-process apply mutex as the daemon/GUI: acquired AFTER the y/N
+    # prompt (so the user isn't blocked while deciding) but BEFORE submitting, so
+    # an interactive `--apply` can't overlap a scheduled run and double-submit.
+    with accounts.try_apply_engine_lock() as acquired:
+        if not acquired:
+            print("\n  Another apply run is already in progress. Try again shortly.")
+            return
+        result = apply_via_browser(
+            int(issue_id), headless=False,
+            default_kitta=default_kitta,
+            credentials=primary,
+            apply_max=apply_max,
+            max_amount=max_amount,
+            share_price=share_price,
+        )
 
-    if result["success"]:
-        print(f"\n  SUCCESS: {result['message']}")
-        applied_state = load_applied()
-        primary_id = primary["id"] if primary else "default"
-        applied_state.setdefault(primary_id, {})[issue_id] = {
-            "company": company_name,
-            "type": issue_type,
-            "applied_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        }
-        if not _safe_save_applied(applied_state, context=f"manual {issue_id}"):
-            print("  WARN: applied state could not be persisted. See logs.")
-    else:
-        print(f"\n  FAILED: {result.get('message', 'Unknown error')}")
+        if result["success"]:
+            print(f"\n  SUCCESS: {result['message']}")
+            applied_state = load_applied()
+            primary_id = primary["id"] if primary else "default"
+            applied_state.setdefault(primary_id, {})[issue_id] = {
+                "company": company_name,
+                "type": issue_type,
+                "applied_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+            if not _safe_save_applied(applied_state, context=f"manual {issue_id}"):
+                print("  WARN: applied state could not be persisted. See logs.")
+        else:
+            print(f"\n  FAILED: {result.get('message', 'Unknown error')}")
 
 
 def run_daemon(config: dict, dry_run=False):
