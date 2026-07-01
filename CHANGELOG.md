@@ -12,6 +12,10 @@ the bottom keep the diff between versions one click away.
 
 ## [2026.07.01.1]
 
+A correctness, safety, and security pass across the whole app (multi-lens
+audit), plus fixes for the data-loss and menu-bar issues found right after.
+Covered by the test suite (CI green across Python 3.10–3.13).
+
 ### Fixed
 
 - **Saved accounts no longer vanish on `brew upgrade`.** Secrets (each account's
@@ -20,25 +24,13 @@ the bottom keep the diff between versions one click away.
   ad-hoc-signed rebuild is a *different* identity, so an upgraded build couldn't
   read them and reset your accounts. Secrets are now stored in a 0600 file under
   ~/Library/Application Support (which survives upgrades), with the Keychain kept
-  as a best-effort mirror. (Existing accounts on this upgrade must be re-entered
-  once; from here on they persist.)
-- **Menu bar no longer gets stuck on "loading…" or out of sync with the
-  dashboard.** A regression in v2026.07.01 tried to repaint the menu from a
-  background thread via a timer that never fired; reverted to the direct render.
-
-## [2026.07.01]
-
-A correctness, safety, and security pass across the whole app, driven by a
-multi-lens audit. Everything below is covered by the test suite (5 CI jobs
-green across Python 3.10–3.13).
-
-### Fixed
-
-- **Menu bar showed stale "open issues" that had already closed**, and showed
-  **no "last check" / "next check" time** unless the launchd scheduler was
-  loaded. Closed issues now drop out quickly (shorter cache + a close-date
-  filter), and last/next-check times show whenever a check has actually run —
-  scheduled or manual.
+  as a best-effort mirror. (Existing accounts must be re-entered once on this
+  upgrade; from here on they persist.)
+- **Menu bar showed stale "open issues" that had already closed**, and **no
+  "last check" / "next check" time** unless the launchd scheduler was loaded.
+  Closed issues now drop out quickly (shorter cache + a close-date filter), and
+  last/next-check times show whenever a check has actually run — scheduled or
+  manual.
 - **Cross-process double-submission is now impossible.** The launchd daemon, the
   dashboard, and the CLI `--apply` share a single apply mutex, so the same issue
   can never be submitted twice by overlapping runs.
@@ -49,9 +41,8 @@ green across Python 3.10–3.13).
 - **Partial account failures are visible.** When some accounts log in but others
   fail, the dashboard and menu bar now say so instead of silently hiding the
   failed account's issues.
-- Menu-bar rendering and quit are marshalled to the main thread; Flask can no
-  longer be double-spawned at launch; issue chips distinguish "unknown" accounts
-  from "not applied".
+- Flask can no longer be double-spawned at launch; issue chips distinguish
+  "unknown" accounts from "not applied".
 - Scheduler "next check" is never shown in the past; timestamps are
   timezone-safe across hosts; log rotation no longer hides the last run.
 - Update check no longer ranks a pre-release above the final release.
@@ -506,8 +497,7 @@ green across Python 3.10–3.13).
   app").
 
 [Unreleased]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.07.01.1...HEAD
-[2026.07.01.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.07.01...v2026.07.01.1
-[2026.07.01]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.8...v2026.07.01
+[2026.07.01.1]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.8...v2026.07.01.1
 [2026.05.07.8]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.3...v2026.05.07.8
 [2026.05.07.7]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.6...v2026.05.07.7
 [2026.05.07.6]: https://github.com/OfficialBishal/MeroShare-Auto-Apply/compare/v2026.05.07.5...v2026.05.07.6
