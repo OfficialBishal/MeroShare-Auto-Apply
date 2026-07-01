@@ -317,29 +317,6 @@ def _format_amount(npr: int | float | None) -> str:
         return str(npr)
 
 
-def _run_on_main(fn) -> None:
-    """Run `fn` on the main thread.
-
-    AppKit/rumps menu mutation and quit_application() must happen on the main
-    thread. When already on main we run synchronously (so tests, which drive the
-    menu from the main thread, stay deterministic); from a background thread we
-    bounce via a 0-delay rumps.Timer (rumps fires timers on the main runloop) —
-    the same mechanism _show_dialog already uses.
-    """
-    if threading.current_thread() is threading.main_thread():
-        fn()
-        return
-    holder = {"t": None}
-
-    def _fire(_sender):
-        if holder["t"]:
-            holder["t"].stop()
-        fn()
-
-    holder["t"] = rumps.Timer(_fire, 0.01)
-    holder["t"].start()
-
-
 def _interval_label(hours: int) -> str:
     if hours == 1:
         return "Every hour"
@@ -866,7 +843,7 @@ class MeroShareMenuBar(rumps.App):
         """Pull state from the Flask API and update the menu in place."""
         flask_alive = self._flask_alive()
         if not flask_alive:
-            _run_on_main(self._render_offline)  # menu mutation -> main thread
+            self._render_offline()
             self._was_offline = True
             return
 
@@ -922,21 +899,21 @@ class MeroShareMenuBar(rumps.App):
         self._failed_accounts = failed_accounts
         self._config_state = new_config
 
-        # Marshal the menu mutation onto the main thread — _refresh_all runs on a
-        # background (fetch) thread, and AppKit/rumps menu APIs are not thread-
-        # safe. Status lines always re-render so "X minutes ago" ticks forward.
-        def _apply_render():
-            self._render_status_lines()
-            if issues_changed:
-                self._render_issues_submenu()
-            if accts_changed:
-                self._render_accounts_submenu()
-            if sched_changed:
-                self._render_scheduler_submenu()
-            if config_changed or sched_changed:
-                self._render_prefs_submenu()
-
-        _run_on_main(_apply_render)
+        # Render directly. _refresh_all runs on a background (fetch) thread, but
+        # rumps/PyObjC has tolerated background menu mutation in this app since
+        # its first release, and the ad-hoc marshal-to-main via rumps.Timer does
+        # NOT reliably fire when scheduled from a non-main thread (no running run
+        # loop there) — which left the menu stuck on "(loading…)". Status lines
+        # always re-render so "X minutes ago" ticks forward.
+        self._render_status_lines()
+        if issues_changed:
+            self._render_issues_submenu()
+        if accts_changed:
+            self._render_accounts_submenu()
+        if sched_changed:
+            self._render_scheduler_submenu()
+        if config_changed or sched_changed:
+            self._render_prefs_submenu()
 
     def _render_offline(self) -> None:
         self._status_line.title = "Status: starting…"
@@ -1499,9 +1476,7 @@ class MeroShareMenuBar(rumps.App):
             SHUTDOWN_SENTINEL.unlink(missing_ok=True)
         except OSError:
             pass
-        # _stop_everything runs on a daemon thread; quit_application() touches
-        # AppKit and must be invoked on the main thread.
-        _run_on_main(rumps.quit_application)
+        rumps.quit_application()
 
     @staticmethod
     def _kill_flask_by_port() -> None:

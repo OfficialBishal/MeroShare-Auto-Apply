@@ -399,14 +399,17 @@ def _atomic_write(path: Path, content: str, mode: int | None = None) -> None:
 
 
 # ── Encrypted-at-rest envelope for accounts.json ──────────────────────
-# Defense-in-depth on top of the keystore: even though sensitive fields
-# (password/CRN/PIN) are already stored separately in the OS keystore,
-# the JSON file still holds metadata (account names, DEMAT IDs, BOIDs,
-# preferred bank). That's not credentials, but it's per-user financial
-# information that doesn't belong in a Time Machine backup readable by
-# anyone holding the disk image. AES-256-GCM with a per-install random
-# key fixes that — the key lives in the keystore, so an attacker needs
-# both the file AND the keystore (i.e. login password access) to read.
+# The JSON file holds metadata (account names, DEMAT IDs, BOIDs, preferred
+# bank) — not credentials (those go through secrets_store), but still
+# per-user financial info. AES-256-GCM with a per-install random key keeps
+# it non-obvious on disk.
+# NOTE: since the file-backed secrets_store (see its module docstring), the
+# AES key now co-resides at 0600 in .secrets.json in this same directory, so
+# the envelope no longer defends against an attacker who can read the data
+# dir (Time Machine / stolen disk image) — it now only keeps casual `cat`
+# output non-obvious. This is the deliberate trade-off that makes account
+# data survive ad-hoc-signed upgrades; strong at-rest protection needs a
+# stable Apple Developer ID signature (keychain-gated key).
 _ENC_VERSION = 1
 
 
@@ -416,31 +419,40 @@ def _get_or_create_file_key() -> bytes | None:
     the keystore is unavailable — caller falls back to plaintext."""
     if not secrets_store.is_available():
         return None
-    raw = secrets_store.get(secrets_store.META_ACCOUNT, secrets_store.META_FILE_KEY)
-    if raw:
+
+    def _decode(raw):
+        if not raw:
+            return None
         try:
-            key = base64.b64decode(raw)
-            if len(key) == 32:
-                return key
-        except Exception as e:
+            k = base64.b64decode(raw)
+            return k if len(k) == 32 else None
+        except Exception:
+            return None
+
+    key = _decode(secrets_store.get(secrets_store.META_ACCOUNT, secrets_store.META_FILE_KEY))
+    if key:
+        return key
+    # Generate the key atomically across processes. Without this lock, two
+    # concurrent first-runs (e.g. a launchd tick coinciding with GUI startup)
+    # could each mint a DIFFERENT key and clobber the other's — leaving one
+    # process's accounts.json encrypted under a key that's no longer on disk,
+    # i.e. undecryptable (the data loss this whole change set out to prevent).
+    with _file_lock(ACCOUNTS_FILE.parent / ".secrets-key.lock"):
+        key = _decode(secrets_store.get(secrets_store.META_ACCOUNT, secrets_store.META_FILE_KEY))
+        if key:  # another process created it while we waited for the lock
+            return key
+        key = os.urandom(32)
+        if not secrets_store.set(
+            secrets_store.META_ACCOUNT,
+            secrets_store.META_FILE_KEY,
+            base64.b64encode(key).decode("ascii"),
+        ):
             logger.warning(
-                "accounts: stored file-encryption key is malformed (%s); "
-                "regenerating. Existing encrypted accounts.json will be "
-                "unreadable. If this triggers right after a crash, restore "
-                "from your last backup.", e,
+                "accounts: could not store file-encryption key; "
+                "falling back to plaintext accounts.json.",
             )
-    key = os.urandom(32)
-    if not secrets_store.set(
-        secrets_store.META_ACCOUNT,
-        secrets_store.META_FILE_KEY,
-        base64.b64encode(key).decode("ascii"),
-    ):
-        logger.warning(
-            "accounts: could not store file-encryption key in keystore; "
-            "falling back to plaintext accounts.json.",
-        )
-        return None
-    return key
+            return None
+        return key
 
 
 def _encrypt_payload_for_disk(payload: dict) -> str:
@@ -520,10 +532,11 @@ def _decrypt_payload_from_disk(raw: str) -> dict:
 
 
 def _save_payload(payload: dict) -> None:
-    # 0o600 keeps plaintext credentials out of reach of other local users.
-    # When the keystore is available we *also* encrypt the file body, so
-    # someone with read access (Time Machine, stolen disk image) needs
-    # the keystore key to read the contents.
+    # 0o600 keeps the file out of reach of OTHER local users. We also encrypt
+    # the body, but the AES key now co-resides at 0600 in .secrets.json here
+    # (file-backed secrets_store), so this protects against other users of the
+    # machine, NOT against someone who can read this user's data dir. See the
+    # _ENC_VERSION note above for the rationale.
     _atomic_write(ACCOUNTS_FILE, _encrypt_payload_for_disk(payload), mode=0o600)
 
 
