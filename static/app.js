@@ -119,6 +119,20 @@
           this.set(key, { loading: false, error: body.error });
           return;
         }
+        // /api/issues returns an envelope {issues, failedAccounts, partial}.
+        // Normalize here so downstream code keeps treating `data` as the list,
+        // and stash the partial-failure info for a banner. (Older bare-list
+        // responses still work via the Array.isArray fallback.)
+        if (key === 'issues' && body && !Array.isArray(body)) {
+          this.set(key, {
+            loading: false,
+            data: body.issues || [],
+            failedAccounts: body.failedAccounts || [],
+            partial: !!body.partial,
+            fetchedAt: Date.now(),
+          });
+          return;
+        }
         this.set(key, { loading: false, data: body, fetchedAt: Date.now() });
       } catch (e) {
         this.set(key, { loading: false, error: 'Network error. Server may be stopped.' });
@@ -356,6 +370,16 @@
       countEl.textContent = total === 0 ? '' : `${total} open · ${pending} pending`;
     }
     host.replaceChildren();
+    // Partial failure: some accounts logged in, others didn't. Warn so a
+    // missing account's issues aren't mistaken for "nothing open". Suppress
+    // when the whole fetch errored (the error state below is the real message).
+    if (!s.error && s.partial && (s.failedAccounts || []).length) {
+      host.appendChild(el('div', {
+        class: 'issues-partial-warning',
+        style: 'background:var(--warning-soft);color:var(--warning);padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;line-height:1.4;',
+        text: `⚠ Couldn't check ${s.failedAccounts.length} account(s): ${s.failedAccounts.join(', ')}. Their issues may be missing — verify credentials in Settings.`,
+      }));
+    }
     if (s.loading && !s.data) { host.appendChild(skeletonRows(3)); return; }
     if (s.error) { host.appendChild(errorState(s.error)); return; }
     if (!s.data || !s.data.length) {

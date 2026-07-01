@@ -10,6 +10,7 @@ Module-level imports of menubar pull in rumps, which is mac-only.
 Skip the whole module on non-darwin so CI's Linux runners stay green.
 """
 import sys
+import threading
 import unittest
 
 if sys.platform != "darwin":
@@ -214,6 +215,7 @@ class AutoStartFlaskTests(unittest.TestCase):
         # `_flask_proc` and the bound methods.
         app = menubar.MeroShareMenuBar.__new__(menubar.MeroShareMenuBar)
         app._flask_proc = None
+        app._flask_spawn_lock = threading.Lock()
         return app
 
     def test_skips_when_flask_already_alive(self):

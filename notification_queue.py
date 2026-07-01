@@ -90,17 +90,26 @@ def drain() -> list[dict]:
     path = _queue_path()
     if not path.exists():
         return []
+    # Atomically claim the queue: rename it aside, THEN read. os.rename is
+    # atomic on POSIX, so any concurrent enqueue (O_APPEND) after the rename
+    # lands in a fresh queue file the next drain picks up — instead of being
+    # silently lost in the read-then-truncate window.
+    claimed = path.with_suffix(path.suffix + f".draining.{os.getpid()}")
     try:
-        raw = path.read_text(encoding="utf-8")
+        os.replace(path, claimed)
+    except OSError as e:
+        logger.debug("notification_queue.drain claim failed: %s", e)
+        return []
+    try:
+        raw = claimed.read_text(encoding="utf-8")
     except OSError as e:
         logger.debug("notification_queue.drain read failed: %s", e)
-        return []
-    # Truncate FIRST so a slow drainer doesn't re-fire entries on the
-    # next tick if the read succeeded but processing failed mid-loop.
-    try:
-        path.write_text("", encoding="utf-8")
-    except OSError as e:
-        logger.debug("notification_queue.drain truncate failed: %s", e)
+        raw = ""
+    finally:
+        try:
+            claimed.unlink()
+        except OSError:
+            pass
     now = int(time.time())
     out: list[dict] = []
     for line in raw.splitlines():

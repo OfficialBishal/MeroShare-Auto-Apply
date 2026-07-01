@@ -337,13 +337,25 @@ def status() -> dict:
       last_result    str | None . Short summary of last run
       next_run       str | None . ISO-ish timestamp of next expected run
     """
+    from datetime import datetime, timedelta
+
     enabled = _is_loaded()
     interval_hours = _read_loaded_interval() if enabled else None
     last_run, last_result = _parse_last_run()
 
+    def _localize(s):
+        # Log timestamps are the machine's LOCAL clock, written naive. Attach the
+        # local offset so consumers (menu bar _format_relative, the web GUI's
+        # new Date()) don't misread them as UTC or Nepal time on a non-NPT host.
+        if not s:
+            return s
+        try:
+            return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").astimezone().isoformat(timespec="seconds")
+        except ValueError:
+            return s
+
     next_run: str | None = None
     if enabled and last_run and interval_hours:
-        from datetime import datetime, timedelta
         try:
             dt = datetime.strptime(last_run, "%Y-%m-%d %H:%M:%S")
             nxt = dt + timedelta(hours=interval_hours)
@@ -355,9 +367,11 @@ def status() -> dict:
                 elapsed = (now - dt).total_seconds()
                 periods = int(elapsed // (interval_hours * 3600)) + 1
                 nxt = dt + timedelta(hours=interval_hours * periods)
-            next_run = nxt.strftime("%Y-%m-%d %H:%M:%S")
+            next_run = _localize(nxt.strftime("%Y-%m-%d %H:%M:%S"))
         except ValueError:
             pass
+
+    last_run = _localize(last_run)
 
     return {
         "enabled": enabled,

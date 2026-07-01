@@ -615,7 +615,15 @@ def api_issues():
             "sharePerUnit": issue.get("sharePerUnit"),
             "applications": applications,
         })
-    return jsonify(result)
+    # Envelope (was a bare list): so a PARTIAL failure — some accounts logged in
+    # but others failed — is visible to the GUI/menu bar instead of silently
+    # dropping the failed accounts' issues and looking like "nothing open".
+    # (Total failure still returns 401 above.) Consumers normalize .issues.
+    return jsonify({
+        "issues": result,
+        "failedAccounts": failed_logins,
+        "partial": bool(failed_logins or report_unknown or eligibility_unknown),
+    })
 
 
 @app.route("/api/status")
@@ -662,6 +670,9 @@ def api_status():
                             r["bankName"] = detail.get("clientName")
                         except Exception as e:
                             logger.warning("Detail fetch failed for %s: %s", form_id, _safe_exc(e))
+                            # Mark it so the UI shows "couldn't load" rather than
+                            # rendering blank fields as if there were genuinely no data.
+                            r["detailUnavailable"] = True
                 all_reports.extend(trimmed)
             finally:
                 client.logout()
@@ -1055,33 +1066,46 @@ def api_test_account_login(account_id):
 
     client = MeroShareClient(credentials=account)
     try:
-        if client.login():
-            try:
-                own = client.get_own_details()
-            finally:
-                client.logout()
-            # Return the rich subset of own-details the GUI can display.
-            # Other fields (clientCode, contact, etc.) are also available
-            # but not displayed to keep the row compact.
-            return jsonify({
-                "success": True,
-                "name": own.get("name", "?"),
-                "demat": own.get("demat", "?"),
-                "boid": own.get("boid"),
-                "email": own.get("email"),
-                "branchCode": own.get("clientCode"),
-                "expiredDate": own.get("expiredDate"),
-                "passwordExpiryDate": own.get("passwordExpiryDate"),
-            })
-        client.session.close()
-        return jsonify({"success": False, "error": "Invalid credentials"})
+        logged_in = client.login()
     except Exception as e:
-        # _safe_exc scrubs password/pin/crn= patterns and truncates;
-        # without it a requests.HTTPError that echoes the submitted
-        # login payload (clientId/username/password JSON) lands in the
-        # browser-visible error toast.
+        # _safe_exc scrubs password/pin/crn= patterns and truncates; without it
+        # a requests.HTTPError echoing the submitted login payload
+        # (clientId/username/password JSON) lands in the browser-visible toast.
         client.session.close()
         return jsonify({"success": False, "error": _safe_exc(e)})
+    if not logged_in:
+        client.session.close()
+        return jsonify({"success": False, "error": "Invalid credentials"})
+
+    # Login SUCCEEDED. A hiccup fetching account details (transient 5xx/timeout
+    # on ownDetail/) must not be reported as a login failure — that sends the
+    # user to "fix" credentials that are actually fine.
+    detail_warning = None
+    try:
+        own = client.get_own_details()
+    except Exception as e:
+        logger.warning("Login OK for %s but ownDetail fetch failed: %s",
+                       account.get("name", account_id), _safe_exc(e))
+        own = {}
+        detail_warning = "Logged in, but could not load account details."
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            pass
+    resp = {
+        "success": True,
+        "name": own.get("name", "?"),
+        "demat": own.get("demat", "?"),
+        "boid": own.get("boid"),
+        "email": own.get("email"),
+        "branchCode": own.get("clientCode"),
+        "expiredDate": own.get("expiredDate"),
+        "passwordExpiryDate": own.get("passwordExpiryDate"),
+    }
+    if detail_warning:
+        resp["warning"] = detail_warning
+    return jsonify(resp)
 
 
 def _tail_lines(path: Path, n: int, *, chunk: int = 8192) -> list[str]:
@@ -1338,13 +1362,23 @@ def api_run_check():
             with _bg_lock:
                 _bg_status["results"] = local_results
             n = len(applied_list)
+            if n:
+                # An apply changes MeroShare's report + applicable lists; drop the
+                # in-process caches so the next /api/issues reflects reality
+                # (mirrors the /api/apply success path, which invalidates per-account).
+                with _report_lock:
+                    _report_cache.clear()
+                with _applicable_lock:
+                    _applicable_cache.clear()
             _bg_set(message=(
                 f"Check complete. Applied for {n} issue(s)" if n
                 else "Check complete. No new issues"
             ))
         except Exception as e:
-            logger.exception("Run-check task crashed")
-            _bg_set(message=f"Check failed: {e}")
+            # Not logger.exception(): the Playwright/requests traceback can echo
+            # CRN/PIN form values or the login payload into the log.
+            logger.error("Run-check task crashed: %s", _safe_exc(e))
+            _bg_set(message=f"Check failed: {_safe_exc(e)}")
         finally:
             _bg_set(running=False)
 

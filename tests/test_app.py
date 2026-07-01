@@ -228,6 +228,22 @@ class IssuesMergeTests(_FlaskTestCase):
         if applied_local:
             accounts.save_applied(applied_local)
 
+    def test_issues_response_is_an_envelope(self):
+        # /api/issues now returns {issues, failedAccounts, partial} so partial
+        # per-account failures are visible instead of silently dropped.
+        self._seed_caches([100], [100])
+        resp = self.client.get("/api/issues")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_json()
+        self.assertIsInstance(body, dict)
+        self.assertIn("issues", body)
+        self.assertIsInstance(body["issues"], list)
+        self.assertIn("failedAccounts", body)
+        self.assertIn("partial", body)
+        # Both accounts served from cache -> no failures.
+        self.assertFalse(body["partial"])
+        self.assertEqual(body["failedAccounts"], [])
+
     def test_right_share_eligible_for_only_one_account(self):
         # Issue 100 is a right share, only Mine is eligible. Issue 200
         # is an IPO, both eligible.
@@ -235,7 +251,7 @@ class IssuesMergeTests(_FlaskTestCase):
         resp = self.client.get("/api/issues")
         self.assertEqual(resp.status_code, 200)
         body = resp.get_json()
-        by_id = {i["id"]: i for i in body}
+        by_id = {i["id"]: i for i in body["issues"]}
 
         # Issue 100 only has Mine's chip; no Spouse chip.
         self.assertIn("100", by_id)
@@ -258,7 +274,7 @@ class IssuesMergeTests(_FlaskTestCase):
         })
         resp = self.client.get("/api/issues")
         self.assertEqual(resp.status_code, 200)
-        by_id = {i["id"]: i for i in resp.get_json()}
+        by_id = {i["id"]: i for i in resp.get_json()["issues"]}
         self.assertIn("100", by_id)
         self.assertTrue(by_id["100"]["applications"]["mine"]["applied"])
         # Spouse never applied for 100 and isn't eligible. No chip.

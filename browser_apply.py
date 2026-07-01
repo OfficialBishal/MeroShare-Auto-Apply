@@ -227,6 +227,15 @@ def apply_via_browser(
             # and resubmit. That's how we end up paging the user with
             # "Application Failed" for forms already in the system.
             if "/apply/" not in page.url:
+                # A redirect to the login page means the session dropped — that is
+                # NOT an "already applied" success. Only treat other redirects
+                # (e.g. back to the ASBA list, MeroShare's already-applied path)
+                # as the benign already-applied case.
+                if "login" in page.url.lower():
+                    return {
+                        "success": False,
+                        "message": "Session expired (redirected to login); not applied.",
+                    }
                 return {
                     "success": True,
                     "already_applied": True,
@@ -387,8 +396,16 @@ def apply_via_browser(
                         max_attr, MAX_KITTA_LIMIT, default_kitta,
                     )
                     kitta_input.fill(str(default_kitta))
-                elif not kitta_value or kitta_value == "0":
-                    kitta_input.fill(str(default_kitta))
+                else:
+                    # apply_max requested but the form's 'max' attribute is
+                    # missing/unreadable. Warn so the degraded outcome is visible
+                    # instead of silently applying the prefilled minimum.
+                    logger.warning(
+                        "apply_max requested but form 'max' attribute unreadable "
+                        "(got %r); falling back to prefilled/default kitta.", max_attr,
+                    )
+                    if not kitta_value or kitta_value == "0":
+                        kitta_input.fill(str(default_kitta))
             elif not kitta_value or kitta_value == "0":
                 kitta_input.fill(str(default_kitta))
 
@@ -428,14 +445,36 @@ def apply_via_browser(
                         raw_kitta,
                     )
                     current = 0
+                # Respect the form's minimum and step so the cap doesn't fill a
+                # below-minimum or non-lot-aligned value the form would reject
+                # (a false "apply failed"). MeroShare renders min/step on the input.
+                def _pos_int_attr(name, fallback):
+                    v = kitta_input.get_attribute(name)
+                    return int(v) if (v and v.isdigit() and int(v) > 0) else fallback
+                min_unit = _pos_int_attr("min", 1)
+                step = _pos_int_attr("step", 1)
                 if current > 0 and current * price > max_amount:
-                    capped = max(1, int(max_amount // price))
+                    affordable = int(max_amount // price)
+                    if affordable < min_unit:
+                        # Even the minimum lot exceeds the budget. Respect the cap:
+                        # don't overspend and don't submit a doomed below-min form.
+                        msg = (
+                            f"Not applied: max_amount {max_amount:,} NPR is below the "
+                            f"minimum {min_unit} kitta (~{int(min_unit * price):,} NPR "
+                            f"at {price} NPR/share)."
+                        )
+                        logger.warning(msg)
+                        return {"success": False, "budget_exceeded": True, "message": msg}
+                    # Snap down to a valid lot. HTML's step base is `min`, so a
+                    # valid value satisfies (value - min) % step == 0 — anchor at
+                    # min_unit, not 0, so odd min/step pairings aren't rejected.
+                    capped = min_unit + ((affordable - min_unit) // step) * step
                     if capped < current:
                         kitta_input.fill(str(capped))
                         logger.info(
-                            "Capped kitta from %d to %d (price=%s NPR) to fit "
-                            "max_amount=%d NPR",
-                            current, capped, price, max_amount,
+                            "Capped kitta from %d to %d (price=%s NPR, min=%d, step=%d) "
+                            "to fit max_amount=%d NPR",
+                            current, capped, price, min_unit, step, max_amount,
                         )
             _pace(0.5, 1)
 

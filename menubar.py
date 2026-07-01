@@ -317,6 +317,29 @@ def _format_amount(npr: int | float | None) -> str:
         return str(npr)
 
 
+def _run_on_main(fn) -> None:
+    """Run `fn` on the main thread.
+
+    AppKit/rumps menu mutation and quit_application() must happen on the main
+    thread. When already on main we run synchronously (so tests, which drive the
+    menu from the main thread, stay deterministic); from a background thread we
+    bounce via a 0-delay rumps.Timer (rumps fires timers on the main runloop) —
+    the same mechanism _show_dialog already uses.
+    """
+    if threading.current_thread() is threading.main_thread():
+        fn()
+        return
+    holder = {"t": None}
+
+    def _fire(_sender):
+        if holder["t"]:
+            holder["t"].stop()
+        fn()
+
+    holder["t"] = rumps.Timer(_fire, 0.01)
+    holder["t"].start()
+
+
 def _interval_label(hours: int) -> str:
     if hours == 1:
         return "Every hour"
@@ -376,6 +399,9 @@ class MeroShareMenuBar(rumps.App):
         # Spawned Flask process, when we started one. Used by "Stop
         # everything" to terminate the right tree.
         self._flask_proc: subprocess.Popen | None = None
+        # Serializes the check-then-Popen in _ensure_flask / _auto_start_flask
+        # so auto-start and a racing first click can't spawn two Flask processes.
+        self._flask_spawn_lock = threading.Lock()
 
         # NSApp doesn't exist until rumps.App.run() spins up the Cocoa
         # runloop, so anything that pokes NSApp (setActivationPolicy_,
@@ -591,17 +617,25 @@ class MeroShareMenuBar(rumps.App):
                 f"app.py not found at {app_py}.\nRe-install the app.",
             )
             return False
-        try:
-            self._flask_proc = subprocess.Popen(
-                [python, str(app_py)],
-                cwd=str(BASE_DIR),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError as e:
-            _show_dialog("Could not start app", str(e))
-            return False
+        with self._flask_spawn_lock:
+            # Re-check inside the lock: auto-start or a racing click may have
+            # brought Flask up while we waited for the lock. Also treat a child
+            # we already launched that's still alive (poll() is None) as "in
+            # flight" — Popen returns before the port binds, so a reachability
+            # probe alone leaves a ~1-2s cold-boot double-spawn window open.
+            if self._flask_alive() or (self._flask_proc and self._flask_proc.poll() is None):
+                return True
+            try:
+                self._flask_proc = subprocess.Popen(
+                    [python, str(app_py)],
+                    cwd=str(BASE_DIR),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as e:
+                _show_dialog("Could not start app", str(e))
+                return False
         # Poll up to 10s for the bind. Cold first-imports on the
         # bundled venv can take a couple of seconds.
         for _ in range(20):
@@ -640,18 +674,23 @@ class MeroShareMenuBar(rumps.App):
         if not app_py.exists():
             logger.warning("auto-start: app.py not found at %s", app_py)
             return
-        try:
-            self._flask_proc = subprocess.Popen(
-                [python, str(app_py)],
-                cwd=str(BASE_DIR),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            logger.info("Auto-started Flask (pid=%s)", self._flask_proc.pid)
-        except OSError as e:
-            logger.warning("auto-start: subprocess.Popen failed: %s", e)
-            return
+        with self._flask_spawn_lock:
+            # A racing _ensure_flask may have started it — or have a spawn in
+            # flight (child alive but port not yet bound during cold boot).
+            if self._flask_alive() or (self._flask_proc and self._flask_proc.poll() is None):
+                return
+            try:
+                self._flask_proc = subprocess.Popen(
+                    [python, str(app_py)],
+                    cwd=str(BASE_DIR),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                logger.info("Auto-started Flask (pid=%s)", self._flask_proc.pid)
+            except OSError as e:
+                logger.warning("auto-start: subprocess.Popen failed: %s", e)
+                return
         # Poll for readiness so the next status tick paints "ready"
         # rather than "stopped" — but cap at 15s so a wedged Flask
         # doesn't hold the thread indefinitely.
@@ -827,7 +866,7 @@ class MeroShareMenuBar(rumps.App):
         """Pull state from the Flask API and update the menu in place."""
         flask_alive = self._flask_alive()
         if not flask_alive:
-            self._render_offline()
+            _run_on_main(self._render_offline)  # menu mutation -> main thread
             self._was_offline = True
             return
 
@@ -849,16 +888,19 @@ class MeroShareMenuBar(rumps.App):
         new_scheduler = self._api("/api/scheduler") or {}
         new_accounts = self._api("/api/accounts") or []
         issues_resp = self._api("/api/issues")
-        # /api/issues returns a bare list on success (possibly empty). A non-2xx
-        # response (401 all-logins-failed, 400 no accounts, 500) makes _api
-        # return None — that's an ERROR, not "no open issues". Capture it so the
-        # menu bar can say "couldn't load" instead of masking a login failure as
-        # an empty list. (A cold-start {} still resolves to an empty list.)
+        # /api/issues returns an envelope {issues, failedAccounts, partial} on
+        # success. A non-2xx response (401 all-logins-failed, 400 no accounts,
+        # 500) makes _api return None — an ERROR, not "no open issues" — so we
+        # surface "couldn't load" instead of masking a login failure as empty.
         issues_error = issues_resp is None
         if isinstance(issues_resp, dict):
             new_issues = issues_resp.get("issues") or []
+            issues_partial = bool(issues_resp.get("partial"))
+            failed_accounts = issues_resp.get("failedAccounts") or []
         else:
-            new_issues = issues_resp or []
+            new_issues = issues_resp or []  # tolerate a legacy bare-list response
+            issues_partial = False
+            failed_accounts = []
         new_config = self._api("/api/config") or {}
 
         # Skip rebuilding submenus whose source data is byte-for-byte
@@ -868,26 +910,33 @@ class MeroShareMenuBar(rumps.App):
         sched_changed = was_offline or new_scheduler != self._scheduler_state
         accts_changed = was_offline or new_accounts != self._accounts_state
         issues_changed = (was_offline or new_issues != self._issues_state
-                          or issues_error != getattr(self, "_issues_error", False))
+                          or issues_error != getattr(self, "_issues_error", False)
+                          or issues_partial != getattr(self, "_issues_partial", False))
         config_changed = was_offline or new_config != self._config_state
 
         self._scheduler_state = new_scheduler
         self._accounts_state = new_accounts
         self._issues_state = new_issues
         self._issues_error = issues_error
+        self._issues_partial = issues_partial
+        self._failed_accounts = failed_accounts
         self._config_state = new_config
 
-        # Status lines are cheap; always re-render so "X minutes ago"
-        # ticks forward.
-        self._render_status_lines()
-        if issues_changed:
-            self._render_issues_submenu()
-        if accts_changed:
-            self._render_accounts_submenu()
-        if sched_changed:
-            self._render_scheduler_submenu()
-        if config_changed or sched_changed:
-            self._render_prefs_submenu()
+        # Marshal the menu mutation onto the main thread — _refresh_all runs on a
+        # background (fetch) thread, and AppKit/rumps menu APIs are not thread-
+        # safe. Status lines always re-render so "X minutes ago" ticks forward.
+        def _apply_render():
+            self._render_status_lines()
+            if issues_changed:
+                self._render_issues_submenu()
+            if accts_changed:
+                self._render_accounts_submenu()
+            if sched_changed:
+                self._render_scheduler_submenu()
+            if config_changed or sched_changed:
+                self._render_prefs_submenu()
+
+        _run_on_main(_apply_render)
 
     def _render_offline(self) -> None:
         self._status_line.title = "Status: starting…"
@@ -911,12 +960,14 @@ class MeroShareMenuBar(rumps.App):
         # against stale state).
         self._issues_state = []
         self._issues_error = False
+        self._issues_partial = False
+        self._failed_accounts = []
         self._accounts_state = []
-        # The "Update Available" item title is sticky between
-        # update-check ticks. If we previously detected an update and
-        # then went offline, the title stays "Update Available: vX →"
-        # until the next successful check. Reset to the neutral
-        # title so a stale update prompt doesn't confuse the user.
+        # Keep the update item's title consistent with _update_info while
+        # offline. When NO update is pending we (re)assert the neutral
+        # "Check for Updates…" title; when an update WAS detected we
+        # deliberately leave "Update Available: vX →" in place so a genuinely
+        # available update stays advertised across the offline transition.
         if self._update_info is None:
             self._update_item.title = "Check for Updates…"
 
@@ -974,6 +1025,10 @@ class MeroShareMenuBar(rumps.App):
             # falsely reassure the user nothing is open.
             self._issues_menu.add(rumps.MenuItem("(couldn't load — check accounts in Settings)"))
             return
+        if getattr(self, "_issues_partial", False) and getattr(self, "_failed_accounts", None):
+            # Some accounts couldn't be checked — their issues may be missing.
+            n = len(self._failed_accounts)
+            self._issues_menu.add(rumps.MenuItem(f"⚠ {n} account(s) couldn't be checked"))
         issues = self._issues_state or []
         if not issues:
             self._issues_menu.add(rumps.MenuItem("(no open issues)"))
@@ -1024,16 +1079,25 @@ class MeroShareMenuBar(rumps.App):
         # Fall back to the older `accountChips` / `chips` shapes for
         # forward-compat.
         applications = issue.get("applications")
+        unknown = 0
         if isinstance(applications, dict):
             total = len(applications)
             applied = sum(1 for a in applications.values()
                           if isinstance(a, dict) and a.get("applied"))
+            # Accounts whose report couldn't be fetched are NOT "not applied" —
+            # don't let them silently drag the ratio down and imply a confirmed
+            # un-applied state.
+            unknown = sum(1 for a in applications.values()
+                          if isinstance(a, dict) and a.get("stateUnknown") and not a.get("applied"))
         else:
             chips = issue.get("accountChips") or issue.get("chips") or []
             applied = sum(1 for c in chips if c.get("state") == "applied")
             total = len(chips)
         if total:
-            item.add(rumps.MenuItem(f"{applied}/{total} accounts applied"))
+            label = f"{applied}/{total} accounts applied"
+            if unknown:
+                label += f" ({unknown} unknown)"
+            item.add(rumps.MenuItem(label))
 
         iid = issue.get("id") or issue.get("companyShareId")
 
@@ -1435,7 +1499,9 @@ class MeroShareMenuBar(rumps.App):
             SHUTDOWN_SENTINEL.unlink(missing_ok=True)
         except OSError:
             pass
-        rumps.quit_application()
+        # _stop_everything runs on a daemon thread; quit_application() touches
+        # AppKit and must be invoked on the main thread.
+        _run_on_main(rumps.quit_application)
 
     @staticmethod
     def _kill_flask_by_port() -> None:
